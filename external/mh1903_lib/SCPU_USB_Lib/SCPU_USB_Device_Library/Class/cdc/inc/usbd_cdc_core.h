@@ -15,7 +15,7 @@
 #include "CircularBuffer.h"
 
 #ifndef BUILD_PRODUCTION
-#define USBD_ENABLE_MSC
+// #define USBD_ENABLE_MSC
 #endif
 
 // #ifdef CONFIG_USB_DEVICE_VCP

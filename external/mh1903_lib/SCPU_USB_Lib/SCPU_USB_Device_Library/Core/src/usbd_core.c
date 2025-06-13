@@ -108,9 +108,11 @@ void USBD_Init(USB_OTG_CORE_HANDLE* pdev, USB_OTG_CORE_ID_TypeDef coreID, USBD_D
 
     /* Upon Init call usr callback */
     pdev->dev.usr_cb->Init();
+    printf("%s %d......\r\n", __func__, __LINE__);
 
     /* Enable Interrupts */
     USB_OTG_BSP_EnableInterrupt(pdev);
+    printf("%s %d......\r\n", __func__, __LINE__);
 
     if (nvicSet == false) {
         nvicSet = true;
@@ -122,6 +124,7 @@ void USBD_Init(USB_OTG_CORE_HANDLE* pdev, USB_OTG_CORE_ID_TypeDef coreID, USBD_D
         NVIC_InitStructure.NVIC_IRQChannelSubPriority        = 1;
         NVIC_InitStructure.NVIC_IRQChannelCmd                = ENABLE;
         NVIC_Init(&NVIC_InitStructure);
+        printf("%s %d......\r\n", __func__, __LINE__);
     }
 }
 
