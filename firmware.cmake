@@ -41,7 +41,7 @@ file(GLOB_RECURSE WEBUSB_PROTOCOL_GENERAL
 file(GLOB_RECURSE USB_DRIVER
     "src/driver/usb/*.c"
     "external/mh1903_lib/SCPU_USB_Lib/SCPU_USB_Device_Library/Core/src/*.c"
-    "external/mh1903_lib/SCPU_USB_Lib/SCPU_USB_Device_Library/Class/msc/src/*.c"
+    # "external/mh1903_lib/SCPU_USB_Lib/SCPU_USB_Device_Library/Class/msc/src/*.c"
     "external/mh1903_lib/SCPU_USB_Lib/SCPU_USB_Device_Library/Class/cdc/src/*.c"
     "external/mh1903_lib/SCPU_USB_Lib/SCPU_USB_Device_Library/Class/hid/src/*.c"
     "external/mh1903_lib/SCPU_USB_Lib/SCPU_USB_OTG_Driver/src/*.c"

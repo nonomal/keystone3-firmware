@@ -110,54 +110,6 @@ static uint8_t HIDDefaultReportDescriptor[] = {
 
 #define USBD_HID_Report HIDDefaultReportDescriptor
 
-#if CONFIG_USB_DEVICE_HID_KEYBOARD
-static uint8_t HIDKeyboardReportDescriptor[] = {
-    USAGE_PAGE(1),      0x01, // USAGE_PAGE (Generic Desktop)
-    USAGE(1),           0x06, // USAGE (Keyboard)
-    COLLECTION(1),      0x01, // Collection (Application)
-
-    USAGE_PAGE(1),      0x07, // USAGE_PAGE (Keyboard)
-    USAGE_MINIMUM(1),   0xe0, // USAGE_MINIMUM (Keyboard LeftControl)
-    USAGE_MAXIMUM(1),   0xe7, // USAGE_MAXIMUM (Keyboard Right GUI)
-
-    LOGICAL_MINIMUM(1), 0x00, // LOGICAL_MINIMUM (0)
-    LOGICAL_MAXIMUM(1), 0x01, // LOGICAL_MAXIMUM (1)
-
-    REPORT_SIZE(1),     0x01, // REPORT_SIZE (1)
-    REPORT_COUNT(1),    0x08, // REPORT_COUNT (8)
-    INPUT(1),           0x02, // INPUT (Data,Var,Abs)
-
-    REPORT_COUNT(1),    0x01, // REPORT_COUNT (1)
-    REPORT_SIZE(1),     0x08, // REPORT_SIZE (8)
-    INPUT(1),           0x03, // INPUT (Cnst,Var,Abs)
-
-    REPORT_COUNT(1),    0x05, // REPORT_COUNT (5)
-    REPORT_SIZE(1),     0x01, // REPORT_SIZE (1)
-    USAGE_PAGE(1),      0x08, // USAGE_PAGE (LEDs)
-    USAGE_MINIMUM(1),   0x01, // USAGE_MINIMUM (Num Lock)
-    USAGE_MAXIMUM(1),   0x05, // USAGE_MAXIMUM (Kana)
-    OUTPUT(1),          0x02, // OUTPUT (Data,Var,Abs)
-
-    REPORT_COUNT(1),    0x01, // REPORT_COUNT (1)
-    REPORT_SIZE(1),     0x03, // REPORT_SIZE (3)
-    OUTPUT(1),          0x03, // OUTPUT (Cnst,Var,Abs)
-
-    REPORT_COUNT(1),    0x06, // REPORT_COUNT (6)
-    REPORT_SIZE(1),     0x08, // REPORT_SIZE (8)
-    LOGICAL_MINIMUM(1), 0x00, // LOGICAL_MINIMUM (0)
-    LOGICAL_MAXIMUM(1), 0xFF, // LOGICAL_MAXIMUM (255)
-    USAGE_PAGE(1),      0x07, // USAGE_PAGE (Keyboard)
-    USAGE_MINIMUM(1),   0x00, // USAGE_MINIMUM (Reserved (no event indicated))
-    USAGE_MAXIMUM(1),   0x65, // USAGE_MAXIMUM (Keyboard Application)
-    INPUT(1),           0x00, // INPUT (Data,Ary,Abs)
-    END_COLLECTION(0),
-};
-
-#undef USBD_HID_Report
-#define USBD_HID_Report HIDKeyboardReportDescriptor
-
-#endif // CONFIG_USB_DEVICE_HID_KEYBOARD
-
 USB_OTG_CORE_HANDLE* USBDevHandle;
 
 void (*USBD_HID_OutputReport_Event)(const uint8_t* reportBuffer) = NULL;
@@ -171,6 +123,7 @@ void (*USBD_HID_OutputReport_Event)(const uint8_t* reportBuffer) = NULL;
  */
 static uint8_t USBD_HID_Init(void* pdev, uint8_t cfgidx)
 {
+    printf("USBD_HID_Init\n");
     USBDevHandle = pdev;
 
     CircularBufferConstractor(&SendCircularBuffer, 0);
@@ -192,7 +145,6 @@ static uint8_t USBD_HID_Init(void* pdev, uint8_t cfgidx)
     /* Prepare Out endpoint to receive next packet */
     DCD_EP_PrepareRx(pdev, HID_OUT_EP, RxBuffer, HID_OUT_PACKET_SIZE);
 #endif
-    printf("%s %d.......\n", __FILE__, __LINE__);
     return USBD_OK;
 }
 
@@ -258,11 +210,9 @@ static uint8_t USBD_HID_Setup(void* pdev, USB_SETUP_REQ* req)
             break;
 
         case USB_REQ_TYPE_STANDARD:
-
             switch (req->bRequest)
             {
                 case USB_REQ_GET_DESCRIPTOR:
-
                     if (req->wValue >> 8 == REPORT_DESCRIPTOR)
                     {
                         descriptorSize = sizeof(USBD_HID_Report);
@@ -319,7 +269,6 @@ uint32_t USBD_HID_PutInputReport(uint8_t* report, uint16_t len)
             reportPoint = reportAlignBuffer;
         }
         uint32_t pushSize = InputBuffer->Push(InputBuffer, reportPoint, HID_IN_PACKET_SIZE, false);
-        printf("reportIndex: %d, pushSize: %d.\n", reportIndex, pushSize);
         if (pushSize != HID_IN_PACKET_SIZE)
             return len;
         len -= MIN(len, HID_IN_PACKET_SIZE);
@@ -345,7 +294,6 @@ uint32_t USBD_HID_GetOutputReport(uint8_t* report, uint32_t len)
 
 static uint8_t* USBD_HID_GetCfgDesc(uint8_t speed, uint16_t* length)
 {
-    printf("%s %d.......\n", __FILE__, __LINE__);
     USBD_HID_Config[2] = LSB(sizeof(USBD_HID_Config));
     USBD_HID_Config[3] = MSB(sizeof(USBD_HID_Config));
 
@@ -367,7 +315,6 @@ static uint8_t USBD_HID_DataIn(void* pdev, uint8_t epnum)
 
     USB_OTG_EP* ep      = &((USB_OTG_CORE_HANDLE*)pdev)->dev.in_ep[epnum];
     uint16_t    txCount = ep->total_data_len;
-    printf("%s %d.......\n", __FILE__, __LINE__);
 
     SendCircularBuffer.EndPop(&SendCircularBuffer, txCount);
     if (!SendCircularBuffer.PopSize && !SendCircularBuffer.StartPop(&SendCircularBuffer, HID_IN_PACKET_SIZE, true, false))
@@ -386,7 +333,6 @@ static uint8_t USBD_HID_DataOut(void* pdev, uint8_t epnum)
     /* Get the received data buffer and update the counter */
     uint16_t rxCount  = HID_OUT_PACKET_SIZE;
     uint16_t rxOffset = 0;
-    printf("%s %d.......\n", __FILE__, __LINE__);
 
     if (RxPending)
     {
@@ -405,16 +351,13 @@ static uint8_t USBD_HID_DataOut(void* pdev, uint8_t epnum)
     else
         RxPending = 0;
 #endif
-    printf("%s %d.......\n", __FILE__, __LINE__);
 
     if (USBD_HID_OutputReport_Event)
         USBD_HID_OutputReport_Event(RxBuffer);
-    printf("%s %d.......\n", __FILE__, __LINE__);
 
 #ifdef HID_OUT_EP
     /* Prepare Out endpoint to receive next packet */
     DCD_EP_PrepareRx(pdev, HID_OUT_EP, (uint8_t*)(RxBuffer), HID_OUT_PACKET_SIZE);
-    printf("%s %d.......\n", __FILE__, __LINE__);
 #endif
     return USBD_OK;
 }
@@ -424,7 +367,6 @@ static uint8_t USBD_HID_EP0_RxReady(void* pdev)
     USB_OTG_EP* ep = &((USB_OTG_CORE_HANDLE*)pdev)->dev.out_ep[0];
     if (ep->xfer_buff != RxBuffer)
         return USBD_OK;
-    printf("%s %d.......\n", __FILE__, __LINE__);
     USBD_HID_DataOut(pdev, NULL);
     return USBD_OK;
 }

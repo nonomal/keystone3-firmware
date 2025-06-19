@@ -101,6 +101,7 @@ bool GetOtpProtection(void)
 
 void MpuSetOtpProtection(bool noAccess)
 {
+    return;
     uint8_t accessPermission = noAccess ? MPU_REGION_NO_ACCESS : MPU_REGION_FULL_ACCESS;
     MpuSetProtection(OTP_ADDR_BASE,
                      MPU_REGION_SIZE_1KB,

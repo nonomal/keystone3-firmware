@@ -8,16 +8,16 @@
 #include "usbd_core.h"
 #include "usbd_desc.h"
 
-#if CONFIG_USB_DEVICE_MSC
-#include "usbd_msc_core.h"
-#undef DeviceCallback
+// #if CONFIG_USB_DEVICE_MSC
+// #include "usbd_msc_core.h"
+// #undef DeviceCallback
 
-#include "usbd_cdc_core.h"
+// #include "usbd_cdc_core.h"
 
 //#define DeviceCallback &USBD_MSC_cb
 #define DeviceCallback &USBCompositeCb
 //#define DeviceCallback &USBD_CDC_cb
-#endif
+// #endif
 
 void UsbInit(void);
 void UsbLoop(void);

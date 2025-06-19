@@ -66,9 +66,9 @@ USBD_Status USBD_StdDevReq(USB_OTG_CORE_HANDLE* pdev, USB_SETUP_REQ* req)
         USBD_GetDescriptor(pdev, req);
         break;
     //case USB_REQ_MS_VENDOR_CODE:
-    case 0xA0:
-        USBD_WinUSBGetDescriptor(pdev, req);
-        break;
+    // case 0xA0:
+    //     USBD_WinUSBGetDescriptor(pdev, req);
+    //     break;
     case USB_REQ_SET_ADDRESS:
         pdev->dev.addr_param.SetAddress_Flag = 1;
         pdev->dev.addr_param.Address_Value   = (uint8_t)(req->wValue) & 0x7F;
