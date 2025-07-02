@@ -164,6 +164,7 @@ static EAPDUFrame_t *FrameParser(const uint8_t *frame, uint32_t len)
 
 void EApduProtocolParse(const uint8_t *frame, uint32_t len)
 {
+    printf("%s %d..\n", __func__, __LINE__);
     if (len < 4) { // Ensure frame has minimum length
         printf("Invalid EAPDU data: too short\n");
         free_parser();

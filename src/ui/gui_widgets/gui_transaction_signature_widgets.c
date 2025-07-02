@@ -107,7 +107,7 @@ static void GuiCreateSignatureQRCode(lv_obj_t *parent)
     if (func) {
         bool showPending = true;
 #if BTC_ONLY
-        showPending = false;
+        // showPending = false;
 #endif
         GuiAnimatingQRCodeInitWithCustomSize(qrCont, func, showPending, 336, 336, (char *)_("sign_transaction"));
     }

@@ -630,6 +630,8 @@ void USBD_cdc_SendBuffer_Cb(const uint8_t *data, uint32_t len)
     USBD_cdc_SendBuffer(data, len);
 }
 
+#include "usbd_hid_core.h"
+
 static void USBD_cdc_SendBuffer(const uint8_t *data, uint32_t len)
 {
     uint32_t sendLen;
@@ -646,10 +648,15 @@ static void USBD_cdc_SendBuffer(const uint8_t *data, uint32_t len)
         remaining = len - g_cdcSendIndex;
         sendLen = remaining > CDC_PACKET_SIZE ? CDC_PACKET_SIZE : remaining;
 
-        while ((DCD_GetEPStatus(&g_usbDev, CDC_IN_EP) != USB_OTG_EP_TX_NAK)) {
+        while ((DCD_GetEPStatus(&g_usbDev, HID_IN_EP) != USB_OTG_EP_TX_NAK)) {
         }
         PrintArray("sendBuf USBD_cdc_SendBuffer", g_cdcSendBuffer + g_cdcSendIndex, sendLen);
-        DCD_EP_Tx(&g_usbDev, CDC_IN_EP, g_cdcSendBuffer + g_cdcSendIndex, sendLen);
+        USBD_HID_PutInputReport(g_cdcSendBuffer + g_cdcSendIndex, sendLen);
+        // DCD_EP_Tx(&g_usbDev, HID_IN_EP, g_cdcSendBuffer + g_cdcSendIndex, sendLen);
+        // while ((DCD_GetEPStatus(&g_usbDev, CDC_IN_EP) != USB_OTG_EP_TX_NAK)) {
+        // }
+        // PrintArray("sendBuf USBD_cdc_SendBuffer", g_cdcSendBuffer + g_cdcSendIndex, sendLen);
+        // DCD_EP_Tx(&g_usbDev, CDC_IN_EP, g_cdcSendBuffer + g_cdcSendIndex, sendLen);
 
         g_cdcSendIndex += sendLen;
     }

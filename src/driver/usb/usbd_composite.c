@@ -80,17 +80,20 @@ void hid_StateChangedEvent(const uint8_t* reportBuffer)
     if (hidOutputSize)
     {
         printf("hidOutputSize: %d\r\n", hidOutputSize);
-        printf("reports: %s\r\n", reports);
+        for (int i = 0; i < hidOutputSize; i++) {
+            printf("%02X ", reports[i]);
+        }
+        printf("\n");
         PushDataToField(reports, hidOutputSize);
         PubValueMsg(SPRING_MSG_GET, hidOutputSize);
-        if (USBD_HID_PutInputReport(reports, hidOutputSize))
-        {
-            printf("Input reports full!\r\n");
-        }
-        else
-        {
-            printf("Put input reports %d\r\n", hidOutputSize);
-        }
+        // if (USBD_HID_PutInputReport(reports, hidOutputSize))
+        // {
+        //     printf("Input reports full!\r\n");
+        // }
+        // else
+        // {
+        //     printf("Put input reports %d\r\n", hidOutputSize);
+        // }
     }
 }
 

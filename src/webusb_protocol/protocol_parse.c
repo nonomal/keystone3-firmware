@@ -24,6 +24,7 @@ void ProtocolReceivedData(const uint8_t *data, uint32_t len, ProtocolSendCallbac
     currentParser = NewInternalProtocolParser();
 #ifndef BTC_ONLY
     if (data[0] == EAPDU_PROTOCOL_HEADER && !GetIsReceivingFile()) {
+        printf("%s %d..\n", __func__, __LINE__);
         currentParser = NewEApduProtocolParser();
     }
 #endif
