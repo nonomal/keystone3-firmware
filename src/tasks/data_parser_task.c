@@ -137,6 +137,7 @@ static void DataParserTask(void *argument)
             for (int i = 0; i < rcvMsg.value; i++) {
                 circular_buf_get(g_cBufHandle, &USB_Rx_Buffer[i]);
             }
+            printf("%s %d..\n", __func__, __LINE__);
             ProtocolReceivedData(USB_Rx_Buffer, rcvMsg.value, USBD_cdc_SendBuffer_Cb);
             break;
         default:

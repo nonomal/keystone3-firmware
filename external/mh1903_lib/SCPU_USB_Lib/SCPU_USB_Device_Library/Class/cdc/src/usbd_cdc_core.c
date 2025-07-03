@@ -637,12 +637,14 @@ static void USBD_cdc_SendBuffer(const uint8_t *data, uint32_t len)
     uint32_t sendLen;
     uint32_t remaining;
     g_cdcSendIndex = 0;
+    printf("%s %d..\n", __func__, __LINE__);
 
     ASSERT(len <= CDC_TX_MAX_LENGTH);
     if (!UsbInitState()) {
         return;
     }
     memcpy(g_cdcSendBuffer, data, len);
+    printf("%s %d..\n", __func__, __LINE__);
 
     while (g_cdcSendIndex < len) {
         remaining = len - g_cdcSendIndex;

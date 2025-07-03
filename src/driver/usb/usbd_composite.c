@@ -205,7 +205,6 @@ static uint8_t CompositeSOF(void* pdev)
 
 static uint8_t* GetCompositeConfigDescriptor(uint8_t speed, uint16_t* length)
 {
-    printf("%s %d......\r\n", __func__, __LINE__);
     *length = 9;
 
     uint16_t descriptorSize = 0;
@@ -241,11 +240,11 @@ static uint8_t* GetCompositeConfigDescriptor(uint8_t speed, uint16_t* length)
 #if HID_ENABLE
     descriptor = USBD_HID_cb.GetConfigDescriptor(speed, &descriptorSize);
     descriptorSize -= 9;
-    printf("%s %d......\r\n", __func__, __LINE__);
-    printf("CompositeConfigDescriptor:\n");
-    for (int i = 0; i < *length; i++) {
-        printf("%02X ", CompositeConfigDescriptor[i]);
-    }
+    // printf("%s %d......\r\n", __func__, __LINE__);
+    // printf("CompositeConfigDescriptor:\n");
+    // for (int i = 0; i < *length; i++) {
+    //     printf("%02X ", CompositeConfigDescriptor[i]);
+    // }
     assert_param(*length + descriptorSize <= USB_COMPOSITE_CONFIG_DESC_MAX_SIZE);
     descriptor[9 + 2] = interfaceIndex; // HID Interface
     interfaceIndex++;
@@ -256,12 +255,12 @@ static uint8_t* GetCompositeConfigDescriptor(uint8_t speed, uint16_t* length)
     CompositeConfigDescriptor[2] = LOBYTE(*length);
     CompositeConfigDescriptor[3] = HIBYTE(*length);
     CompositeConfigDescriptor[4] = interfaceIndex;
-    printf("length: %d\n", *length);
-    printf("interfaceIndex: %d\n", interfaceIndex);
-    for (int i = 0; i < *length; i++) {
-        printf("%02X", CompositeConfigDescriptor[i]);
-    }
-    printf("\n");
+    // printf("length: %d\n", *length);
+    // printf("interfaceIndex: %d\n", interfaceIndex);
+    // for (int i = 0; i < *length; i++) {
+    //     printf("%02X", CompositeConfigDescriptor[i]);
+    // }
+    // printf("\n");
 
     return CompositeConfigDescriptor;
 }
