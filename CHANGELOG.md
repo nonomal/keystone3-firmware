@@ -1,3 +1,15 @@
+## 3.0.2 (2026-07-24)
+
+**Cypherpunk:**
+
+### Notes
+This release is intended solely to support the Zcash Ironwood upgrade and is only compatible with the Cypherpunk edition. Unless you require support for the Ironwood upgrade, we recommend that you do not upgrade. Please note that once upgraded, you cannot downgrade to the 3.0.0 Multi-Coin or BTC-Only firmware. If you install this release by mistake, you will need to wait for a future firmware release before switching back.
+
+### Added
+1. Added support for the Zcash Ironwood upgrade.
+2. Added support for batch PCZT signing for Zcash.
+
+
 ## 3.0.0 (2026-07-20)
 
 **Web3:**
@@ -48,7 +60,6 @@
 ### Improvements
 1. Improved Dice Roll Entropy Validation
 2. Improved Unlock Passcode Verification
-
 
 
 ## 2.4.6 (2026-6-12)
