@@ -368,10 +368,17 @@ void GuiKeyDerivationRequestPrevTile()
     lv_obj_set_tile_id(g_keyDerivationTileView.tileView, g_keyDerivationTileView.currentTile, 0, LV_ANIM_OFF);
 }
 
+bool GuiKeyDerivationRequestIsUsbPasswordReady(void)
+{
+    char *password = SecretCacheGetPassword();
+    return g_isUsb && g_isUsbPassWordCheck && password != NULL &&
+           strnlen_s(password, PASSWORD_MAX_LEN) != 0;
+}
+
 void UpdateAndParseHardwareCall(void)
 {
     GuiModelURClear();
-    if (strnlen_s(SecretCacheGetPassword(), PASSWORD_MAX_LEN) != 0 && g_isUsbPassWordCheck) {
+    if (GuiKeyDerivationRequestIsUsbPasswordReady()) {
         if (g_response != NULL) {
             free_Response_QRHardwareCallData(g_response);
             g_response = NULL;
@@ -840,7 +847,7 @@ static void GuiShowKeyBoardDialog(lv_obj_t *parent)
 static void OnApproveHandler(lv_event_t *e)
 {
     // click approve button and check the hardware call params
-    HardwareCallResult_t res =  g_hardwareCallParamsCheckResult;
+    HardwareCallResult_t res = g_hardwareCallParamsCheckResult;
     if (!res.isLegal) {
         GuiCreateHardwareCallInvaildParamHintbox(res.title, res.message);
         return;
@@ -892,7 +899,15 @@ void HiddenKeyboardAndShowAnimateQR()
         }
         g_isUsbPassWordCheck = true;
         UREncodeResult *urResult = ModelGenerateSyncUR();
-        HandleURResultViaUSBFunc(urResult->data, strlen(urResult->data), GetCurrentUSParsingRequestID(), PRS_EXPORT_HARDWARE_CALL_SUCCESS);
+        if (urResult == NULL || urResult->data == NULL) {
+            const char *data = "Generate sync ur failed";
+            HandleURResultViaUSBAsyncFunc(data, strlen(data), GetCurrentUSParsingRequestID(), RSP_FAILURE_CODE);
+            if (urResult != NULL) {
+                free_ur_encode_result(urResult);
+            }
+            return;
+        }
+        HandleURResultViaUSBAsyncFunc(urResult->data, strlen(urResult->data), GetCurrentUSParsingRequestID(), PRS_EXPORT_HARDWARE_CALL_SUCCESS);
         free_ur_encode_result(urResult);
     } else {
         GuiDeleteKeyboardWidget(g_keyboardWidget);
@@ -1228,7 +1243,7 @@ static void ApproveButtonHandler(lv_event_t *e)
 static void RejectButtonHandler(lv_event_t *e)
 {
     const char *data = "UR parsing rejected";
-    HandleURResultViaUSBFunc(data, strlen(data), GetCurrentUSParsingRequestID(), PRS_PARSING_REJECTED);
+    HandleURResultViaUSBAsyncFunc(data, strlen(data), GetCurrentUSParsingRequestID(), PRS_PARSING_REJECTED);
     GuiCloseCurrentWorkingView();
 }
 

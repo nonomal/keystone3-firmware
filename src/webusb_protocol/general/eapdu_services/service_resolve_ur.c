@@ -1,4 +1,6 @@
 #include "service_resolve_ur.h"
+#include <string.h>
+#include <stdio.h>
 #include "user_delay.h"
 #include "gui_chain.h"
 #include "user_msg.h"
@@ -6,6 +8,7 @@
 #include "gui_lock_widgets.h"
 #include "gui_resolve_ur.h"
 #include "gui_views.h"
+#include "gui_framework.h"
 #include "general_msg.h"
 #include "gui_home_widgets.h"
 #include "gui_key_derivation_request_widgets.h"
@@ -63,6 +66,31 @@ void HandleURResultViaUSBFunc(const void *data, uint32_t data_len, uint16_t requ
     SRAM_FREE(resultPage);
 };
 
+void HandleURResultViaUSBAsyncFunc(const void *data, uint32_t data_len, uint16_t requestID, StatusEnum status)
+{
+    if (data == NULL) {
+        return;
+    }
+
+    uint32_t msgLen = sizeof(USBURResultMsg_t) + data_len + 1;
+    USBURResultMsg_t *msg = (USBURResultMsg_t *)SRAM_MALLOC(msgLen);
+    if (msg == NULL) {
+        HandleURResultViaUSBFunc(data, data_len, requestID, status);
+        return;
+    }
+
+    msg->dataLen = data_len;
+    msg->requestID = requestID;
+    msg->status = status;
+    memcpy(msg->data, data, data_len);
+    msg->data[data_len] = '\0';
+
+    if (PubBufferMsg(USB_MSG_HANDLE_UR_RESULT, msg, msgLen) != MSG_SUCCESS) {
+        HandleURResultViaUSBFunc(data, data_len, requestID, status);
+    }
+    SRAM_FREE(msg);
+}
+
 uint16_t GetCurrentUSParsingRequestID()
 {
     return g_requestID;
@@ -107,11 +135,11 @@ static bool IsRequestAllowed(uint32_t requestID)
 {
     if (g_requestID != REQUEST_ID_IDLE) {
         const char *data = "Previous request is not finished";
-        HandleURResultViaUSBFunc(data, strlen(data), requestID, PRS_PARSING_DISALLOWED);
-        return false;
-    }
-
-    if (!CheckURAcceptable()) {
+        StatusEnum status = PRS_PARSING_DISALLOWED;
+        if (GuiCheckIfViewOpened(&g_keyDerivationRequestView)) {
+            data = "Waiting for user approval";
+        }
+        HandleURResultViaUSBFunc(data, strlen(data), requestID, status);
         return false;
     }
 
@@ -120,7 +148,20 @@ static bool IsRequestAllowed(uint32_t requestID)
 
 static void HandleHardwareCall(struct URParseResult *urResult)
 {
-    if (GuiCheckIfTopView(&g_keyDerivationRequestView) || GuiHomePageIsTop()) {
+    if (GuiCheckIfViewOpened(&g_keyDerivationRequestView)) {
+        if (!GuiKeyDerivationRequestIsUsbPasswordReady()) {
+            const char *data = "Waiting for user approval";
+            printf("[USB ResolveUR] hardware_call source=view_open wait_ui req=%u\r\n", (unsigned int)g_requestID);
+            HandleURResultViaUSBFunc(data, strlen(data), g_requestID, PRS_PARSING_DISALLOWED);
+            free_ur_parse_result(urResult);
+            return;
+        }
+        GuiSetKeyDerivationRequestData(urResult, NULL, false);
+        PubValueMsg(UI_MSG_USB_HARDWARE_VIEW, 0);
+        return;
+    }
+
+    if (GuiHomePageIsTop()) {
         GuiSetKeyDerivationRequestData(urResult, NULL, false);
         PubValueMsg(UI_MSG_USB_HARDWARE_VIEW, 0);
         return;
@@ -137,7 +178,7 @@ static bool HandleNormalCall(void)
         return true;
     }
 
-    if (GuiCheckIfTopView(&g_USBTransportView)) {
+    if (GuiCheckIfTopView(&g_USBTransportView) || GuiCheckIfTopView(&g_keyDerivationRequestView)) {
         PubValueMsg(UI_MSG_USB_TRANSPORT_NEXT_VIEW, 0);
         UserDelay(200);
         return true;
@@ -187,6 +228,9 @@ void ProcessURService(EAPDURequestPayload_t *payload)
 
         if (urResult->ur_type == QRHardwareCall) {
             HandleHardwareCall(urResult);
+            break;
+        }
+        if (!CheckURAcceptable()) {
             break;
         }
         if (!HandleNormalCall()) {
