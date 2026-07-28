@@ -684,34 +684,14 @@ static UREncodeResult *GetEthSignDataDynamic(bool isUnlimited)
     SetLockScreen(false);
     UREncodeResult *encodeResult;
     void *data = g_isMulti ? g_urMultiResult->data : g_urResult->data;
-    // get the urType
-    enum QRCodeType urType = URTypeUnKnown;
-    if (g_isMulti) {
-        urType = g_urMultiResult->ur_type;
-    } else {
-        urType = g_urResult->ur_type;
-    }
     do {
         uint8_t seed[64];
         int len = GetMnemonicType() == MNEMONIC_TYPE_BIP39 ? sizeof(seed) : GetCurrentAccountEntropyLen();
         GetAccountSeed(GetCurrentAccountIndex(), seed, SecretCacheGetPassword());
         if (isUnlimited) {
-            if (urType == Bytes) {
-                uint8_t mfp[4] = {0};
-                GetMasterFingerPrint(mfp);
-                // sign the bytes from keystone hot wallet
-                encodeResult = eth_sign_tx_bytes(data, seed, len, mfp, sizeof(mfp));
-            } else {
-                encodeResult = eth_sign_tx_unlimited(data, seed, len);
-            }
+            encodeResult = eth_sign_tx_unlimited(data, seed, len);
         } else {
-            if (urType == Bytes) {
-                uint8_t mfp[4] = {0};
-                GetMasterFingerPrint(mfp);
-                encodeResult = eth_sign_tx_bytes(data, seed, len, mfp, sizeof(mfp));
-            } else {
-                encodeResult = eth_sign_tx(data, seed, len);
-            }
+            encodeResult = eth_sign_tx(data, seed, len);
         }
         ClearSecretCache();
         CHECK_CHAIN_BREAK(encodeResult);
@@ -1089,36 +1069,18 @@ void *GuiGetEthData(void)
     g_contractDataExist = false;
     g_erc20Name = NULL;
     CHECK_FREE_PARSE_RESULT(g_parseResult);
-    uint8_t mfp[4];
     void *data = g_isMulti ? g_urMultiResult->data : g_urResult->data;
 
-    enum ViewType viewType = ViewTypeUnKnown;
-    enum QRCodeType urType = URTypeUnKnown;
-    if (g_isMulti) {
-        urType = g_urMultiResult->ur_type;
-        viewType = g_urMultiResult->t;
-    } else {
-        urType = g_urResult->ur_type;
-    }
     char *rootPath = NULL;
-    if (urType == Bytes) {
-        rootPath = eth_get_root_path_bytes(data);
-    } else {
-        rootPath = eth_get_root_path(data);
-    }
+    rootPath = eth_get_root_path(data);
     char *ethXpub = "";
     ChainType chainType = GetEthPublickeyIndex(rootPath);
     if (chainType != 0xFF) {
         ethXpub = GetCurrentAccountPublicKey(chainType);
     }
-    GetMasterFingerPrint(mfp);
     PtrT_TransactionParseResult_DisplayETH parseResult = NULL;
     do {
-        if (urType == Bytes) {
-            parseResult = eth_parse_bytes_data(data, ethXpub);
-        } else {
-            parseResult = eth_parse(data, ethXpub);
-        }
+        parseResult = eth_parse(data, ethXpub);
         CHECK_CHAIN_BREAK(parseResult);
         g_parseResult = (void *)parseResult;
         if (parseResult->data->overview->from != NULL) {
@@ -1137,22 +1099,8 @@ PtrT_TransactionCheckResult GuiGetEthCheckResult(void)
 {
     uint8_t mfp[4];
     void *data = g_isMulti ? g_urMultiResult->data : g_urResult->data;
-    enum QRCodeType urType = URTypeUnKnown;
-    void *crypto = NULL;
-    if (g_isMulti) {
-        crypto = g_urMultiResult->data;
-        urType = g_urMultiResult->ur_type;
-    } else {
-        crypto = g_urResult->data;
-        urType = g_urResult->ur_type;
-    }
     GetMasterFingerPrint(mfp);
-    // get the urType
-    if (urType == Bytes) {
-        return eth_check_ur_bytes(data, mfp, sizeof(mfp), urType);
-    } else {
-        return eth_check(data, mfp, sizeof(mfp));
-    }
+    return eth_check(data, mfp, sizeof(mfp));
 }
 
 void GetEthTransType(void *indata, void *param, uint32_t maxLen)

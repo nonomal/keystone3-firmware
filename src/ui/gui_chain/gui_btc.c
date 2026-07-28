@@ -55,9 +55,9 @@ static UtxoViewToChain_t g_UtxoViewToChainMap[] = {
 };
 
 #ifdef WEB3_VERSION
-#define CHECK_UR_TYPE() (urType == Bytes || urType == KeystoneSignRequest)
+#define CHECK_UR_TYPE() (urType == KeystoneSignRequest)
 #else
-#define CHECK_UR_TYPE() (urType == Bytes)
+#define CHECK_UR_TYPE() (false)
 #endif
 #endif
 
@@ -205,7 +205,7 @@ static bool SupportSignPsbtFromSDCard(void)
 static bool SupportSignLegacyKeystoneTransactions(QRCodeType urType)
 {
 #ifdef WEB3_VERSION
-    return (urType == Bytes || urType == KeystoneSignRequest);
+    return (urType == KeystoneSignRequest);
 #else
     return false;
 #endif

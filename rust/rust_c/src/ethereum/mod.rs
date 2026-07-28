@@ -2,34 +2,24 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::{format, slice};
 
-use app_ethereum::address::derive_address;
 use app_ethereum::batch_tx_rules::rule_swap;
 use app_ethereum::erc20::{parse_erc20_approval, parse_erc20_transfer};
 use app_ethereum::errors::EthereumError;
 use app_ethereum::{
     parse_fee_market_tx, parse_legacy_tx, parse_personal_message, parse_typed_data_message,
-    LegacyTransaction, TransactionSignature,
 };
-use cryptoxide::hashing::keccak256;
 
 use keystore::algorithms::secp256k1::derive_public_key;
 use ur_registry::ethereum::eth_batch_sign_requests::EthBatchSignRequest;
 use ur_registry::ethereum::eth_batch_signature::EthBatchSignature;
 use ur_registry::ethereum::eth_sign_request::EthSignRequest;
 use ur_registry::ethereum::eth_signature::EthSignature;
-use ur_registry::pb;
-use ur_registry::pb::protoc::base::Content::ColdVersion;
-use ur_registry::pb::protoc::payload::Content;
-use ur_registry::pb::protoc::sign_transaction::Transaction::EthTx;
 use ur_registry::traits::RegistryItem;
 
-use crate::common::errors::{KeystoneError, RustCError};
-use crate::common::keystone::build_payload;
+use crate::common::errors::RustCError;
 use crate::common::structs::{Response, TransactionCheckResult, TransactionParseResult};
 use crate::common::types::{PtrBytes, PtrString, PtrT, PtrUR};
-use crate::common::ur::{
-    QRCodeType, UREncodeResult, FRAGMENT_MAX_LENGTH_DEFAULT, FRAGMENT_UNLIMITED_LENGTH,
-};
+use crate::common::ur::{UREncodeResult, FRAGMENT_MAX_LENGTH_DEFAULT, FRAGMENT_UNLIMITED_LENGTH};
 use crate::common::utils::{convert_c_char, recover_c_char};
 use crate::common::KEYSTONE;
 use crate::{extract_array, extract_array_mut, extract_ptr_with_type};
@@ -43,52 +33,6 @@ mod abi;
 pub mod address;
 pub mod structs;
 pub(crate) mod util;
-
-unsafe fn extract_sign_tx_from_payload(
-    ptr: PtrUR,
-) -> Result<ur_registry::pb::protoc::SignTransaction, KeystoneError> {
-    let payload = build_payload(ptr, QRCodeType::Bytes)?;
-    let content = payload
-        .content
-        .ok_or_else(|| KeystoneError::ProtobufError("empty payload content".to_string()))?;
-    match content {
-        Content::SignTx(sign_tx) => Ok(sign_tx),
-        _ => Err(KeystoneError::ProtobufError(
-            "Cant get sign tx struct data".to_string(),
-        )),
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn eth_check_ur_bytes(
-    ptr: PtrUR,
-    master_fingerprint: PtrBytes,
-    length: u32,
-    ur_type: QRCodeType,
-) -> PtrT<TransactionCheckResult> {
-    if length != 4 {
-        return TransactionCheckResult::from(RustCError::InvalidMasterFingerprint).c_ptr();
-    }
-    let payload = build_payload(ptr, ur_type);
-    match payload {
-        Ok(payload) => {
-            let mfp = extract_array!(master_fingerprint, u8, 4);
-            let mfp: [u8; 4] = mfp.to_vec().try_into().unwrap_or_default();
-
-            let xfp = payload.xfp;
-            let xfp_vec: [u8; 4] = hex::decode(xfp)
-                .unwrap_or_default()
-                .try_into()
-                .unwrap_or_default();
-            if mfp == xfp_vec {
-                TransactionCheckResult::new().c_ptr()
-            } else {
-                TransactionCheckResult::from(RustCError::MasterFingerprintMismatch).c_ptr()
-            }
-        }
-        Err(e) => TransactionCheckResult::from(KeystoneError::ProtobufError(e.to_string())).c_ptr(),
-    }
-}
 
 #[no_mangle]
 pub unsafe extern "C" fn eth_check(
@@ -123,23 +67,6 @@ pub unsafe extern "C" fn eth_check(
     } else {
         TransactionCheckResult::from(RustCError::MasterFingerprintMismatch).c_ptr()
     }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn eth_get_root_path_bytes(ptr: PtrUR) -> PtrString {
-    let sign_tx = match extract_sign_tx_from_payload(ptr) {
-        Ok(sign_tx) => sign_tx,
-        Err(_) => return convert_c_char("".to_string()),
-    };
-    // convert "M/44'/60'/0'/0/0" to "/44'/60'/0'"
-    let root_path = sign_tx
-        .hd_path
-        .split('/')
-        .skip(1)
-        .take(3)
-        .collect::<Vec<&str>>()
-        .join("/");
-    convert_c_char(root_path)
 }
 
 #[no_mangle]
@@ -194,47 +121,6 @@ fn try_get_eth_public_key(
             }
         }
     }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn eth_parse_bytes_data(
-    ptr: PtrUR,
-    xpub: PtrString,
-) -> PtrT<TransactionParseResult<DisplayETH>> {
-    let sign_tx = match extract_sign_tx_from_payload(ptr) {
-        Ok(sign_tx) => sign_tx,
-        Err(e) => {
-            return TransactionParseResult::from(KeystoneError::ProtobufError(e.to_string()))
-                .c_ptr();
-        }
-    };
-    let xpub = recover_c_char(xpub);
-    let root_path = &sign_tx
-        .hd_path
-        .split('/')
-        .skip(1)
-        .take(3)
-        .collect::<Vec<&str>>()
-        .join("/");
-    let address = derive_address(
-        sign_tx.hd_path.to_uppercase().trim_start_matches("M/"),
-        &xpub,
-        root_path,
-    )
-    .unwrap();
-    let tx = sign_tx.transaction.unwrap();
-    let eth_tx = match tx {
-        EthTx(tx) => tx,
-        _ => {
-            return TransactionParseResult::from(RustCError::InvalidData(
-                "Cant get eth tx struct data".to_string(),
-            ))
-            .c_ptr();
-        }
-    };
-    let mut display_eth = DisplayETH::try_from(eth_tx).unwrap();
-    display_eth = display_eth.set_from_address(address);
-    TransactionParseResult::success(display_eth.c_ptr()).c_ptr()
 }
 
 #[no_mangle]
@@ -599,112 +485,6 @@ pub unsafe extern "C" fn eth_sign_tx_dynamic(
             }
         }
     }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn eth_sign_tx_bytes(
-    ptr: PtrUR,
-    seed: PtrBytes,
-    seed_len: u32,
-    mfp: PtrBytes,
-    mfp_len: u32,
-) -> PtrT<UREncodeResult> {
-    let sign_tx = match extract_sign_tx_from_payload(ptr) {
-        Ok(sign_tx) => sign_tx,
-        Err(e) => {
-            return UREncodeResult::from(KeystoneError::ProtobufError(e.to_string())).c_ptr();
-        }
-    };
-    let eth_tx = match sign_tx.transaction {
-        Some(EthTx(tx)) => tx,
-        _ => {
-            return UREncodeResult::from(RustCError::InvalidData(
-                "Cant get eth tx struct data".to_string(),
-            ))
-            .c_ptr();
-        }
-    };
-
-    let legacy_transaction = match LegacyTransaction::try_from(eth_tx) {
-        Ok(tx) => tx,
-        Err(_) => {
-            return UREncodeResult::from(RustCError::InvalidData("invalid eth tx".to_string()))
-                .c_ptr();
-        }
-    };
-
-    let mut seed = extract_array_mut!(seed, u8, seed_len as usize);
-    let mfp = extract_array!(mfp, u8, mfp_len as usize);
-
-    let signature = match app_ethereum::sign_legacy_tx_v2(
-        &legacy_transaction.encode_raw(),
-        seed,
-        &sign_tx.hd_path,
-    ) {
-        Ok(sig) => sig,
-        Err(e) => {
-            seed.zeroize();
-            return UREncodeResult::from(e).c_ptr();
-        }
-    };
-    seed.zeroize();
-    let transaction_signature = match TransactionSignature::try_from(signature) {
-        Ok(sig) => sig,
-        Err(_) => {
-            return UREncodeResult::from(RustCError::InvalidData(
-                "invalid transaction signature".to_string(),
-            ))
-            .c_ptr();
-        }
-    };
-
-    let legacy_tx_with_signature = legacy_transaction.set_signature(transaction_signature);
-    // tx_id is transaction hash , you can use this hash to search tx detail on the etherscan.
-    let tx_hash = keccak256(&legacy_tx_with_signature.encode_raw());
-    let raw_tx = legacy_tx_with_signature.encode_raw();
-    // add 0x prefix for tx_id and raw_tx
-    let sign_tx_result = ur_registry::pb::protoc::SignTransactionResult {
-        sign_id: sign_tx.sign_id,
-        tx_id: format!("0x{}", hex::encode(tx_hash)),
-        raw_tx: format!("0x{}", hex::encode(raw_tx)),
-    };
-
-    let content = ur_registry::pb::protoc::payload::Content::SignTxResult(sign_tx_result);
-    let payload = ur_registry::pb::protoc::Payload {
-        //  type is ur_registry::pb::protoc::payload::Type::SignTxResult
-        r#type: 9,
-        xfp: hex::encode(mfp).to_uppercase(),
-        content: Some(content),
-    };
-    let base = ur_registry::pb::protoc::Base {
-        version: 1,
-        description: "keystone qrcode".to_string(),
-        data: Some(payload),
-        device_type: "keystone Pro".to_string(),
-        content: Some(ColdVersion(31206)),
-    };
-    let base_vec = ur_registry::pb::protobuf_parser::serialize_protobuf(base);
-    // zip data can reduce the size of the data
-    let zip_data = match pb::protobuf_parser::zip(&base_vec) {
-        Ok(data) => data,
-        Err(e) => {
-            return UREncodeResult::from(RustCError::InvalidData(e.to_string())).c_ptr();
-        }
-    };
-    // data --> protobuf --> zip protobuf data --> cbor bytes data
-    let bytes = match ur_registry::bytes::Bytes::new(zip_data).try_into() {
-        Ok(b) => b,
-        Err(e) => {
-            return UREncodeResult::from(RustCError::InvalidData("invalid bytes".to_string()))
-                .c_ptr();
-        }
-    };
-    UREncodeResult::encode(
-        bytes,
-        ur_registry::bytes::Bytes::get_registry_type().get_type(),
-        FRAGMENT_MAX_LENGTH_DEFAULT,
-    )
-    .c_ptr()
 }
 
 #[no_mangle]
