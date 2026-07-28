@@ -538,6 +538,7 @@ fn parse_transparent_output<P: consensus::Parameters>(
                 is_change,
                 false,
                 None,
+                is_change,
             ))
         }
         Some(TransparentAddress::ScriptHash(_hash)) => {
@@ -552,6 +553,7 @@ fn parse_transparent_output<P: consensus::Parameters>(
                 false,
                 false,
                 None,
+                false,
             ))
         }
         _ => Err(ZcashError::InvalidPczt(
@@ -759,6 +761,7 @@ pub(crate) fn parse_orchard_output<P: consensus::Parameters>(
                     is_internal,
                     is_dummy,
                     memo,
+                    belongs_to_wallet,
                 )))
             }
             // We couldn't decrypt.
@@ -827,6 +830,10 @@ pub(crate) fn parse_orchard_output<P: consensus::Parameters>(
                     "missing user address for {pool} output"
                 ))),
             }?;
+            let is_mine = match output.recipient() {
+                Some(recipient) => is_wallet_orchard_address(keys, recipient)?,
+                None => false,
+            };
             Ok(ParsedTo::new(
                 address,
                 format_zec_value(value as f64),
@@ -834,6 +841,7 @@ pub(crate) fn parse_orchard_output<P: consensus::Parameters>(
                 false,
                 is_dummy,
                 None,
+                is_mine,
             ))
         }
         Some(x) => Ok(x),
@@ -852,7 +860,15 @@ mod display_accounting_tests {
     }
 
     fn to(amount: u64, is_change: bool) -> ParsedTo {
-        ParsedTo::new(String::new(), String::new(), amount, is_change, false, None)
+        ParsedTo::new(
+            String::new(),
+            String::new(),
+            amount,
+            is_change,
+            false,
+            None,
+            is_change,
+        )
     }
 
     fn assert_invalid_pczt_message<T: core::fmt::Debug>(
