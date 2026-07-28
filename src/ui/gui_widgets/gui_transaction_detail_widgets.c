@@ -115,7 +115,7 @@ static void TransactionGoToHomeViewHandler(lv_event_t *e)
 #ifndef BTC_ONLY
     if (GetCurrentTransactionMode() == TRANSACTION_MODE_USB) {
         const char *data = "UR parsing rejected";
-        HandleURResultViaUSBFunc(data, strlen(data), GetCurrentUSParsingRequestID(), PRS_PARSING_REJECTED);
+        HandleURResultViaUSBAsyncFunc(data, strlen(data), GetCurrentUSParsingRequestID(), PRS_PARSING_REJECTED);
     }
 #endif
     CloseQRTimer();
@@ -247,9 +247,9 @@ void GuiTransactionDetailVerifyPasswordSuccess(void)
             return;
         }
         if (urResult->error_code == 0) {
-            HandleURResultViaUSBFunc(urResult->data, strlen(urResult->data), GetCurrentUSParsingRequestID(), RSP_SUCCESS_CODE);
+            HandleURResultViaUSBAsyncFunc(urResult->data, strlen(urResult->data), GetCurrentUSParsingRequestID(), RSP_SUCCESS_CODE);
         } else {
-            HandleURResultViaUSBFunc(urResult->error_message, strlen(urResult->error_message), GetCurrentUSParsingRequestID(), PRS_PARSING_ERROR);
+            HandleURResultViaUSBAsyncFunc(urResult->error_message, strlen(urResult->error_message), GetCurrentUSParsingRequestID(), PRS_PARSING_ERROR);
         }
         free_ur_encode_result(urResult);
         return;
@@ -267,7 +267,7 @@ void GuiSignVerifyPasswordErrorCount(void *param)
 #ifndef BTC_ONLY
         if (GetCurrentTransactionMode() == TRANSACTION_MODE_USB) {
             const char *data = "Please try again after unlocking";
-            HandleURResultViaUSBFunc(data, strlen(data), GetCurrentUSParsingRequestID(), PRS_PARSING_VERIFY_PASSWORD_ERROR);
+            HandleURResultViaUSBAsyncFunc(data, strlen(data), GetCurrentUSParsingRequestID(), PRS_PARSING_VERIFY_PASSWORD_ERROR);
         }
 #endif
     }
