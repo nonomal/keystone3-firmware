@@ -27,4 +27,4 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Run rust/apps/utils
-        run: cd rust/apps/utils && cargo +$RUST_TOOLCHAIN llvm-cov --fail-under-regions 91 --fail-under-functions 80 --fail-under-lines 84 --ignore-filename-regex 'keystore/*'
+        run: cd rust/apps/utils && cargo +$RUST_TOOLCHAIN llvm-cov --fail-under-regions 98 --fail-under-functions 100 --fail-under-lines 97 --ignore-filename-regex 'keystore/*|keystone.rs|macros.rs'

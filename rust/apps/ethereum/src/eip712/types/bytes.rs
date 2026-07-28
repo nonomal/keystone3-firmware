@@ -96,3 +96,36 @@ where
     .map(Into::into)
     .map_err(|e| serde::de::Error::custom(e.to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+
+    #[test]
+    fn bytes_parse_debug_and_conversions() {
+        let prefixed: Bytes = "0xdeadbeef".parse().unwrap();
+        let unprefixed: Bytes = "deadbeef".parse().unwrap();
+
+        assert_eq!(prefixed, unprefixed);
+        assert_eq!(format!("{prefixed:?}"), "Bytes(0xdeadbeef)");
+        assert_eq!(Bytes::new(), Bytes::default());
+        assert_eq!(Bytes::from(vec![1, 2]).0.as_ref(), &[1, 2]);
+        assert_eq!(
+            Bytes::from(bytes::Bytes::from_static(&[3, 4])).0.as_ref(),
+            &[3, 4]
+        );
+        assert_eq!(Bytes::from_static(&[5, 6]).0.as_ref(), &[5, 6]);
+        assert!("0xnot-hex".parse::<Bytes>().is_err());
+    }
+
+    #[test]
+    fn bytes_serde_accepts_prefixed_and_unprefixed_hex() {
+        let value = Bytes::from(vec![0x12, 0xAB]);
+
+        assert_eq!(serde_json::to_string(&value).unwrap(), r#""0x12ab""#);
+        assert_eq!(serde_json::from_str::<Bytes>(r#""0x12ab""#).unwrap(), value);
+        assert_eq!(serde_json::from_str::<Bytes>(r#""12ab""#).unwrap(), value);
+        assert!(serde_json::from_str::<Bytes>(r#""xyz""#).is_err());
+    }
+}

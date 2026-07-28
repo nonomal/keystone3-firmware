@@ -112,3 +112,15 @@ pub enum SolanaOverview {
     SplTokenTransfer(ProgramOverviewSplTokenTransfer),
     JupiterV6SwapOverview(JupiterV6SwapOverview),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_overview_uses_user_facing_description() {
+        let overview = ProgramOverviewUnknown::default();
+
+        assert_eq!(overview.description, "This transaction can not be decoded");
+    }
+}

@@ -143,3 +143,46 @@ impl Instruction {
         .map_err(|e| ProgramError(e.to_string()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PROGRAM_IDS: [&str; 8] = [
+        "11111111111111111111111111111111",
+        "Vote111111111111111111111111111111111111111",
+        "Stake11111111111111111111111111111111111111",
+        "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "SwapsVeCiPHMUAtzQWZw7RjsKjgCjhwU55QGu4U1Szw",
+        "LendZqTs7gn5CTSJU1jWKhKuVpjJGom45nnwPb2AMTi",
+        "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf",
+        "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+    ];
+
+    #[test]
+    fn recognizes_supported_program_ids_and_rejects_unknown_programs() {
+        for program_id in PROGRAM_IDS {
+            assert!(SupportedProgram::from_program_id(program_id.to_string()).is_ok());
+        }
+
+        let error = SupportedProgram::from_program_id("unknown".to_string()).unwrap_err();
+        assert_eq!(error.to_string(), "Program `unknown` is not supported yet");
+    }
+
+    #[test]
+    fn read_and_parse_reject_malformed_instruction_data() {
+        assert!(matches!(
+            Instruction::read(&mut vec![]),
+            Err(SolanaError::InvalidData(_))
+        ));
+
+        for program_id in &PROGRAM_IDS[..6] {
+            let instruction = Instruction {
+                program_index: 0,
+                account_indexes: vec![],
+                data: vec![],
+            };
+            assert!(instruction.parse(program_id, vec![]).is_err());
+        }
+    }
+}
