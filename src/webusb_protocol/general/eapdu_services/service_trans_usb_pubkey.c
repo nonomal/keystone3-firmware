@@ -25,22 +25,17 @@ static bool ParseCoinType(const uint8_t *data, uint32_t len, uint32_t *coinType)
     return true;
 }
 
-static char *ParseSolDerivationPath(const uint8_t *data, uint32_t len)
+static bool ParseSolDerivationPath(const uint8_t *data, uint32_t len, char *path, size_t pathSize)
 {
-    if (data == NULL || len < 1) {
-        return NULL;
+    if (data == NULL || path == NULL || pathSize == 0 || len < 1) {
+        return false;
     }
 
     uint8_t depth = data[0];
     uint32_t expectedLen = 1 + (depth * 4);
 
     if (len < expectedLen) {
-        return NULL;
-    }
-
-    char *path = (char *)SRAM_MALLOC(BUFFER_SIZE_32);
-    if (path == NULL) {
-        return NULL;
+        return false;
     }
 
     path[0] = '\0';
@@ -55,19 +50,18 @@ static char *ParseSolDerivationPath(const uint8_t *data, uint32_t len)
 
         bool isHardened = (component & 0x80000000) != 0;
         if (!isHardened) {
-            SRAM_FREE(path);
-            return NULL;
+            return false;
         }
 
         component &= 0x7FFFFFFF;
         if (strlen(path) == 0) {
-            snprintf(path, BUFFER_SIZE_32, "%u'", component);
+            snprintf(path, pathSize, "%u'", component);
         } else {
-            snprintf(path + strlen(path), BUFFER_SIZE_32 - strlen(path), "/%u'", component);
+            snprintf(path + strlen(path), pathSize - strlen(path), "/%u'", component);
         }
     }
 
-    return path;
+    return true;
 }
 
 void GetDeviceUsbPubkeyService(EAPDURequestPayload_t *payload)
@@ -76,7 +70,7 @@ void GetDeviceUsbPubkeyService(EAPDURequestPayload_t *payload)
     cJSON *root = NULL;
     char *json_str = NULL;
     uint32_t coinType = 0;
-    char *path = NULL;
+    char path[BUFFER_SIZE_32] = {0};
     char *pubKey = NULL;
 
     result = (EAPDUResponsePayload_t *)SRAM_MALLOC(sizeof(EAPDUResponsePayload_t));
@@ -101,8 +95,9 @@ void GetDeviceUsbPubkeyService(EAPDURequestPayload_t *payload)
         goto create_response;
     }
 
-    path = ParseSolDerivationPath(payload->data + COIN_TYPE_SIZE, payload->dataLen - COIN_TYPE_SIZE);
-    if (path == NULL) {
+    if (!ParseSolDerivationPath(payload->data + COIN_TYPE_SIZE,
+                                payload->dataLen - COIN_TYPE_SIZE,
+                                path, sizeof(path))) {
         cJSON_AddStringToObject(root, "error", "Failed to parse derivation path");
         goto create_response;
     }
@@ -145,9 +140,6 @@ cleanup:
     }
     if (root != NULL) {
         cJSON_Delete(root);
-    }
-    if (path != NULL) {
-        SRAM_FREE(path);
     }
     if (result != NULL) {
         SRAM_FREE(result);
