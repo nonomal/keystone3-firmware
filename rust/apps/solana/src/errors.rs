@@ -57,3 +57,38 @@ impl From<serde_json::Error> for SolanaError {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_variants_have_actionable_messages() {
+        let errors = [
+            SolanaError::AddressError("bad address".to_string()),
+            SolanaError::KeystoreError("locked".to_string()),
+            SolanaError::UnsupportedProgram("program".to_string()),
+            SolanaError::InvalidData("message".to_string()),
+            SolanaError::ProgramError("invalid instruction".to_string()),
+            SolanaError::AccountNotFound("source".to_string()),
+            SolanaError::ParseTxError("invalid transaction".to_string()),
+        ];
+
+        for error in errors {
+            assert!(!error.to_string().is_empty());
+        }
+    }
+
+    #[test]
+    fn external_errors_keep_their_context() {
+        let hex_error = hex::decode("xyz").unwrap_err();
+        assert!(SolanaError::from(hex_error)
+            .to_string()
+            .contains("hex operation failed"));
+
+        let json_error = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
+        assert!(SolanaError::from(json_error)
+            .to_string()
+            .contains("serde json operation failed"));
+    }
+}

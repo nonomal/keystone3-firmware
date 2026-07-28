@@ -1228,3 +1228,136 @@ pub struct SolanaDetail {
     #[serde(flatten)]
     pub kind: ProgramDetail,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serializes_representative_program_details() {
+        let details = vec![
+            ProgramDetail::SystemTransfer(ProgramDetailSystemTransfer::default()),
+            ProgramDetail::SystemTransferWithSeed(ProgramDetailSystemTransferWithSeed::default()),
+            ProgramDetail::SystemCreateAccount(ProgramDetailSystemCreateAccount::default()),
+            ProgramDetail::SystemAssign(ProgramDetailSystemAssign::default()),
+            ProgramDetail::SystemAssignWithSeed(ProgramDetailSystemAssignWithSeed::default()),
+            ProgramDetail::SystemCreateAccountWithSeed(
+                ProgramDetailSystemCreateAccountWithSeed::default(),
+            ),
+            ProgramDetail::SystemAdvanceNonceAccount(
+                ProgramDetailSystemAdvanceNonceAccount::default(),
+            ),
+            ProgramDetail::SystemWithdrawNonceAccount(
+                ProgramDetailSystemWithdrawNonceAccount::default(),
+            ),
+            ProgramDetail::SystemInitializeNonceAccount(
+                ProgramDetailSystemInitializeNonceAccount::default(),
+            ),
+            ProgramDetail::SystemAuthorizeNonceAccount(
+                ProgramDetailSystemAuthorizeNonceAccount::default(),
+            ),
+            ProgramDetail::SystemAllocate(ProgramDetailSystemAllocate::default()),
+            ProgramDetail::SystemAllocateWithSeed(ProgramDetailSystemAllocateWithSeed::default()),
+            ProgramDetail::SystemUpgradeNonceAccount(
+                ProgramDetailSystemUpgradeNonceAccount::default(),
+            ),
+            ProgramDetail::VoteInitializeAccount(ProgramDetailVoteInitAccount::default()),
+            ProgramDetail::VoteAuthorize(ProgramDetailVoteAuthorize::default()),
+            ProgramDetail::VoteVote(ProgramDetailVoteVote::default()),
+            ProgramDetail::VoteWithdraw(ProgramDetailVoteWithdraw::default()),
+            ProgramDetail::VoteUpdateValidatorIdentity(
+                ProgramDetailVoteUpdateValidatorIdentity::default(),
+            ),
+            ProgramDetail::VoteUpdateCommission(ProgramDetailVoteUpdateCommission::default()),
+            ProgramDetail::VoteVoteSwitch(ProgramDetailVoteVoteSwitch::default()),
+            ProgramDetail::VoteAuthorizeChecked(ProgramDetailVoteAuthorizeChecked::default()),
+            ProgramDetail::VoteAuthorizeWithSeed(ProgramDetailVoteAuthorizeWithSeed::default()),
+            ProgramDetail::VoteAuthorizeCheckedWithSeed(
+                ProgramDetailVoteAuthorizeCheckedWithSeed::default(),
+            ),
+            ProgramDetail::TokenInitializeMint(ProgramDetailTokenInitializeMint::default()),
+            ProgramDetail::TokenInitializeAccount(ProgramDetailTokenInitializeAccount::default()),
+            ProgramDetail::TokenInitializeMultisig(ProgramDetailTokenInitializeMultisig::default()),
+            ProgramDetail::TokenTransfer(ProgramDetailTokenTransfer::default()),
+            ProgramDetail::TokenApprove(ProgramDetailTokenApprove::default()),
+            ProgramDetail::TokenRevoke(ProgramDetailTokenRevoke::default()),
+            ProgramDetail::TokenSetAuthority(ProgramDetailTokenSetAuthority::default()),
+            ProgramDetail::TokenMintTo(ProgramDetailTokenMintTo::default()),
+            ProgramDetail::TokenBurn(ProgramDetailTokenBurn::default()),
+            ProgramDetail::TokenCloseAccount(ProgramDetailTokenCloseAccount::default()),
+            ProgramDetail::TokenFreezeAccount(ProgramDetailTokenFreezeAccount::default()),
+            ProgramDetail::TokenThawAccount(ProgramDetailTokenThawAccount::default()),
+            ProgramDetail::TokenTransferChecked(ProgramDetailTokenTransferChecked::default()),
+            ProgramDetail::TokenApproveChecked(ProgramDetailTokenApproveChecked::default()),
+            ProgramDetail::TokenMintToChecked(ProgramDetailTokenMintToChecked::default()),
+            ProgramDetail::TokenBurnChecked(ProgramDetailTokenBurnChecked::default()),
+            ProgramDetail::TokenInitializeAccount2(ProgramDetailTokenInitializeAccount2::default()),
+            ProgramDetail::TokenInitializeAccount3(ProgramDetailTokenInitializeAccount3::default()),
+            ProgramDetail::TokenInitializeMultisig2(
+                ProgramDetailTokenInitializeMultisig2::default(),
+            ),
+            ProgramDetail::TokenInitializeMint2(ProgramDetailTokenInitializeMint2::default()),
+            ProgramDetail::TokenSyncNative(ProgramDetailTokenSyncNative::default()),
+            ProgramDetail::StakeDelegateStake(ProgramDetailStakeDelegateStake::default()),
+            ProgramDetail::StakeWithdraw(ProgramDetailStakeWithdraw::default()),
+            ProgramDetail::StakeInitialize(ProgramDetailStakeInitialize::default()),
+            ProgramDetail::StakeAuthorize(ProgramDetailStakeAuthorize::default()),
+            ProgramDetail::StakeSplit(ProgramDetailStakeSplit::default()),
+            ProgramDetail::StakeDeactivate(ProgramDetailStakeDeactivate::default()),
+            ProgramDetail::StakeSetLockup(ProgramDetailStakeSetLockup::default()),
+            ProgramDetail::StakeMerge(ProgramDetailStakeMerge::default()),
+            ProgramDetail::StakeAuthorizeWithSeed(ProgramDetailStakeAuthorizeWithSeed::default()),
+            ProgramDetail::StakeInitializeChecked(ProgramDetailStakeInitializeChecked::default()),
+            ProgramDetail::StakeAuthorizeChecked(ProgramDetailStakeAuthorizeChecked::default()),
+            ProgramDetail::StakeAuthorizeCheckedWithSeed(
+                ProgramDetailStakeAuthorizeCheckedWithSeed::default(),
+            ),
+            ProgramDetail::StakeSetLockupChecked(ProgramDetailStakeSetLockupChecked::default()),
+            ProgramDetail::StakeGetMinimumDelegation(
+                ProgramDetailStakeGetMinimumDelegation::default(),
+            ),
+            ProgramDetail::StakeDeactivateDelinquent(
+                ProgramDetailStakeDeactivateDelinquent::default(),
+            ),
+            ProgramDetail::Unknown(ProgramDetailUnknown::default()),
+            ProgramDetail::GeneralUnknown(ProgramDetailGeneralUnknown::default()),
+            ProgramDetail::RawUnknown(ProgramDetailRawUnknown::default()),
+            ProgramDetail::Instruction(ProgramDetailInstruction::default()),
+        ];
+
+        for kind in details {
+            let detail = SolanaDetail {
+                common: CommonDetail {
+                    program: "test-program".to_string(),
+                    method: String::new(),
+                },
+                kind,
+            };
+            let json = serde_json::to_string(&detail).unwrap();
+            assert!(json.contains(r#""program":"test-program""#));
+            assert!(!json.contains(r#""method""#));
+        }
+    }
+
+    #[test]
+    fn unknown_detail_conversions_keep_public_information() {
+        let detail = ProgramDetailUnknown {
+            program_index: 7,
+            account_indexes: vec![1, 2],
+            data: "data".to_string(),
+            reason: "unsupported".to_string(),
+            accounts: "accounts".to_string(),
+            program_account: "program".to_string(),
+        };
+
+        let general = ProgramDetailGeneralUnknown::from_unknown_detail(&detail);
+        let raw = ProgramDetailRawUnknown::from_unknown_detail(&detail);
+
+        assert_eq!(general.reason, "unsupported");
+        assert_eq!(raw.program_index, 7);
+        assert_eq!(raw.account_indexes, vec![1, 2]);
+        assert_eq!(raw.data, "data");
+        assert_eq!(raw.accounts, "accounts");
+        assert_eq!(raw.program_account, "program");
+    }
+}

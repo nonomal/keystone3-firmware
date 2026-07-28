@@ -35,3 +35,25 @@ impl ToString for SolanaTxDisplayType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_types_have_stable_labels() {
+        let cases = [
+            (SolanaTxDisplayType::Transfer, "Transfer"),
+            (SolanaTxDisplayType::TokenTransfer, "TokenTransfer"),
+            (SolanaTxDisplayType::Vote, "Vote"),
+            (SolanaTxDisplayType::General, "General"),
+            (SolanaTxDisplayType::Unknown, "Unknown"),
+            (SolanaTxDisplayType::SquadsV4, "SquadsV4"),
+            (SolanaTxDisplayType::JupiterV6, "JupiterV6"),
+        ];
+
+        for (display_type, expected) in cases {
+            assert_eq!(display_type.to_string(), expected);
+        }
+    }
+}

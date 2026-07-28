@@ -1426,7 +1426,7 @@ checksum = "b365fabc795046672053e29c954733ec3b05e4be654ab130fe8f1f94d7051f35"
 [[package]]
 name = "cuprate-cryptonight"
 version = "0.1.0"
-source = "git+https://github.com/KeystoneHQ/cuprate#8ae09c3d83eb1a48050d7f46dc9ed5e0c6feedca"
+source = "git+https://github.com/KeystoneHQ/cuprate?tag=no_std%400.1.0#731832313f581c13a47a90deff16d399b838d1d6"
 dependencies = [
  "digest 0.10.7",
  "groestl",

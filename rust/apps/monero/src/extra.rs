@@ -90,3 +90,57 @@ impl Extra {
         res
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+    use curve25519_dalek::scalar::Scalar;
+
+    #[test]
+    fn serialize_all_extra_field_types() {
+        let public_key = EdwardsPoint::mul_base(&Scalar::ONE);
+        let additional_key = EdwardsPoint::mul_base(&Scalar::from(2u64));
+        let merge_mining_data = [0xAB; 32];
+        let extra = Extra(vec![
+            ExtraField::Padding(2),
+            ExtraField::PublicKey(public_key),
+            ExtraField::Nonce(vec![0x10, 0x20]),
+            ExtraField::MergeMining(32, merge_mining_data),
+            ExtraField::PublicKeys(vec![additional_key]),
+            ExtraField::MysteriousMinergate(vec![0xCA, 0xFE]),
+        ]);
+
+        let serialized = extra.serialize();
+        let mut expected = vec![0x00, 0x00, 0x00];
+        expected.push(0x01);
+        expected.extend_from_slice(&public_key.compress().to_bytes());
+        expected.extend_from_slice(&[0x02, 0x02, 0x10, 0x20]);
+        expected.extend_from_slice(&[0x03, 32]);
+        expected.extend_from_slice(&merge_mining_data);
+        expected.extend_from_slice(&[0x04, 0x01]);
+        expected.extend_from_slice(&additional_key.compress().to_bytes());
+        expected.extend_from_slice(&[0xDE, 0xCA, 0xFE]);
+
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn new_and_push_nonce_preserve_field_order() {
+        let public_key = EdwardsPoint::mul_base(&Scalar::ONE);
+        let additional_key = EdwardsPoint::mul_base(&Scalar::from(2u64));
+
+        let mut without_additional = Extra::new(public_key, vec![]);
+        without_additional.push_nonce(vec![7]);
+        assert!(matches!(
+            without_additional.0.as_slice(),
+            [ExtraField::PublicKey(_), ExtraField::Nonce(nonce)] if nonce == &[7]
+        ));
+
+        let with_additional = Extra::new(public_key, vec![additional_key]);
+        assert!(matches!(
+            with_additional.0.as_slice(),
+            [ExtraField::PublicKey(_), ExtraField::PublicKeys(keys)] if keys == &[additional_key]
+        ));
+    }
+}
