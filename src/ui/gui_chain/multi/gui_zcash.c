@@ -276,14 +276,14 @@ static lv_obj_t* GuiZcashOverviewTo(lv_obj_t *parent, VecFFI_DisplayTo *to, lv_o
         valueLabel = GuiCreateIllustrateLabel(innerContainer, to->data[i].value);
         lv_obj_set_style_text_color(valueLabel, ORANGE_COLOR, LV_PART_MAIN);
         lv_obj_align_to(valueLabel, indexLabel, LV_ALIGN_OUT_RIGHT_MID, 16, 0);
-        if (to->data[i].is_change) {
+        if (to->data[i].is_change || to->data[i].is_mine) {
             lv_obj_t *tagContainer = GuiCreateContainerWithParent(innerContainer, 87, 30);
             lv_obj_set_style_radius(tagContainer, 16, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_color(tagContainer, WHITE_COLOR, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_opa(tagContainer, 30, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_t *tagLabel = lv_label_create(tagContainer);
 
-            lv_label_set_text(tagLabel, "Change");
+            lv_label_set_text(tagLabel, to->data[i].is_change ? "Change" : "Mine");
             lv_obj_set_style_text_font(tagLabel, g_defIllustrateFont, LV_PART_MAIN);
             lv_obj_set_style_text_color(tagLabel, WHITE_COLOR, LV_PART_MAIN);
             lv_obj_set_style_text_opa(tagLabel, 163, LV_PART_MAIN);

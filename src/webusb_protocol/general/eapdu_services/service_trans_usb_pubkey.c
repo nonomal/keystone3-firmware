@@ -25,6 +25,7 @@ static bool ParseCoinType(const uint8_t *data, uint32_t len, uint32_t *coinType)
     return true;
 }
 
+#ifdef WEB3_VERSION
 static bool ParseSolDerivationPath(const uint8_t *data, uint32_t len, char *path, size_t pathSize)
 {
     if (data == NULL || path == NULL || pathSize == 0 || len < 1) {
@@ -63,6 +64,7 @@ static bool ParseSolDerivationPath(const uint8_t *data, uint32_t len, char *path
 
     return true;
 }
+#endif
 
 void GetDeviceUsbPubkeyService(EAPDURequestPayload_t *payload)
 {
@@ -95,6 +97,13 @@ void GetDeviceUsbPubkeyService(EAPDURequestPayload_t *payload)
         goto create_response;
     }
 
+#ifndef WEB3_VERSION
+    // Solana public keys only exist in the multi-coins firmware.
+    (void)path;
+    (void)pubKey;
+    cJSON_AddStringToObject(root, "error", "Unsupported coin type");
+    goto create_response;
+#else
     if (!ParseSolDerivationPath(payload->data + COIN_TYPE_SIZE,
                                 payload->dataLen - COIN_TYPE_SIZE,
                                 path, sizeof(path))) {
@@ -117,6 +126,7 @@ void GetDeviceUsbPubkeyService(EAPDURequestPayload_t *payload)
     cJSON_AddStringToObject(root, "pubkey", pubKey);
     cJSON_AddStringToObject(root, "derivationPath", path);
     cJSON_AddNumberToObject(root, "coinType", coinType);
+#endif
 
 create_response:
     json_str = cJSON_PrintBuffered(root, BUFFER_SIZE_1024, false);

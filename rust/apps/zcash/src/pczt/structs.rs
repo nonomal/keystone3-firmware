@@ -38,7 +38,8 @@ impl_public_struct!(ParsedTo {
     amount: u64,
     is_change: bool,
     is_dummy: bool,
-    memo: Option<String>
+    memo: Option<String>,
+    is_mine: bool
 });
 
 impl_public_struct!(ParsedOrchard {
@@ -101,6 +102,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
         transparent.add_to(to);
         assert_eq!(transparent.get_to().len(), 1);
@@ -136,6 +138,7 @@ mod tests {
             true,
             false,
             Some("Test memo".to_string()),
+            true,
         );
         assert_eq!(to.get_address(), "recipient_address");
         assert_eq!(to.get_value(), "3.0 ZEC");
@@ -154,6 +157,7 @@ mod tests {
             false,
             true,
             None,
+            false,
         );
         assert!(to.get_is_dummy());
         assert!(!to.get_is_change());
@@ -178,6 +182,7 @@ mod tests {
             true,
             false,
             None,
+            true,
         );
         orchard.add_to(to);
         assert_eq!(orchard.get_to().len(), 1);
@@ -200,6 +205,7 @@ mod tests {
                 false,
                 false,
                 None,
+                false,
             )],
         );
         let orchard = ParsedOrchard::new(
@@ -211,6 +217,7 @@ mod tests {
                 true,
                 false,
                 None,
+                true,
             )],
         );
         let pczt = ParsedPczt::new(
@@ -279,6 +286,7 @@ mod tests {
                 } else {
                     None
                 },
+                i == 2,
             );
             transparent.add_to(to);
         }
@@ -325,6 +333,7 @@ mod tests {
                 i % 2 == 0,
                 false,
                 Some(alloc::format!("Memo {i}")),
+                i % 2 == 0,
             );
             orchard.add_to(to);
         }
@@ -357,6 +366,7 @@ mod tests {
             false,
             false,
             Some("Zero amount".to_string()),
+            false,
         );
         assert_eq!(to.get_amount(), 0);
         assert_eq!(to.get_value(), "0.0 ZEC");
@@ -371,6 +381,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
         assert_eq!(to.get_amount(), 21000000_00000000u64);
         assert_eq!(to.get_value(), "21000000.0 ZEC");
@@ -386,6 +397,7 @@ mod tests {
             false,
             false,
             Some(long_memo.clone()),
+            false,
         );
         assert_eq!(to.get_memo().as_ref().map(|s| s.len()), Some(512));
     }
@@ -399,6 +411,7 @@ mod tests {
             false,
             false,
             Some("".to_string()),
+            false,
         );
         assert!(to.get_memo().is_some());
         assert_eq!(to.get_memo().unwrap(), "");
@@ -431,6 +444,7 @@ mod tests {
             true,
             true,
             Some("memo".to_string()),
+            true,
         );
         assert!(to.get_is_change());
         assert!(to.get_is_dummy());
@@ -445,6 +459,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
         assert!(!to.get_is_change());
         assert!(!to.get_is_dummy());
@@ -474,6 +489,7 @@ mod tests {
             false,
             false,
             Some("Payment 1".to_string()),
+            false,
         ));
         transparent.add_to(ParsedTo::new(
             "t1output2".to_string(),
@@ -482,6 +498,7 @@ mod tests {
             false,
             false,
             Some("Payment 2".to_string()),
+            false,
         ));
         transparent.add_to(ParsedTo::new(
             "t1change".to_string(),
@@ -490,6 +507,7 @@ mod tests {
             true,
             false,
             None,
+            true,
         ));
 
         let mut orchard = ParsedOrchard::new(vec![], vec![]);
@@ -506,6 +524,7 @@ mod tests {
             true,
             false,
             Some("Orchard change".to_string()),
+            true,
         ));
 
         let pczt = ParsedPczt::new(
@@ -600,6 +619,7 @@ mod tests {
             false,
             false,
             Some(special_memo.to_string()),
+            false,
         );
         assert_eq!(to.get_memo().unwrap(), special_memo);
     }

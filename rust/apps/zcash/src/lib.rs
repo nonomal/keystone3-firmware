@@ -526,6 +526,7 @@ impl BatchMigrationSummary {
                         true,
                         false,
                         None,
+                        true,
                     )
                 })
                 .collect(),
@@ -1888,6 +1889,14 @@ mod tests {
         assert!(parsed_pczt.get_orchard().is_none());
         assert_eq!(parsed_pczt.get_fee_value(), "0.0001 ZEC");
 
+        // The output pays the wallet's own external Ironwood receiver: not
+        // change, but recognized as the wallet's own address.
+        let ironwood = parsed_pczt.get_ironwood().unwrap();
+        let to = ironwood.get_to();
+        assert_eq!(to.len(), 1);
+        assert!(!to[0].get_is_change());
+        assert!(to[0].get_is_mine());
+
         check_pczt_cypherpunk(
             &pczt::test_support::Nu6_3Network,
             &sample.bytes,
@@ -1937,6 +1946,8 @@ mod tests {
         assert_eq!(to[0].get_value(), "0.0099 ZEC");
         assert!(to[0].get_address().starts_with("u1"));
         assert!(!to[0].get_is_change());
+        // The recipient is the wallet's own external address.
+        assert!(to[0].get_is_mine());
 
         assert_eq!(parsed.get_fee_value(), "0.0001 ZEC");
 
@@ -3152,6 +3163,9 @@ mod tests {
         let output = &outputs[0];
         assert_eq!(output.get_amount(), 990_000);
         assert!(!output.get_is_change());
+        // Another account's receiver must not be marked as the selected
+        // account's own address.
+        assert!(!output.get_is_mine());
         assert!(migration_transfer_summary(&parsed).is_none());
     }
 
@@ -3232,6 +3246,7 @@ mod tests {
                 true,
                 false,
                 None,
+                true,
             )],
         );
         let build = |transparent: Option<ParsedTransparent>, has_sapling: bool| {
