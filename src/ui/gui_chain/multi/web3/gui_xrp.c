@@ -65,11 +65,7 @@ void *GuiGetXrpData(void)
 
     PtrT_TransactionParseResult_DisplayXrpTx parseResult = NULL;
     do {
-        if (is_keystone_xrp_tx(data)) {
-            parseResult = xrp_parse_bytes_tx(data);
-        } else {
-            parseResult = xrp_parse_tx(data);
-        }
+        parseResult = xrp_parse_tx(data);
         CHECK_CHAIN_BREAK(parseResult);
 
         g_parseResult = (void *)parseResult;
@@ -85,21 +81,7 @@ PtrT_TransactionCheckResult GuiGetXrpCheckResult(void)
     if (g_cachedPubkey[GetCurrentAccountIndex()] != NULL) {
         strcpy_s(pubkey, XPUB_KEY_LEN, g_cachedPubkey[GetCurrentAccountIndex()]);
     }
-    enum QRCodeType urType = URTypeUnKnown;
-    if (g_isMulti) {
-        urType = g_urMultiResult->ur_type;
-    } else {
-        urType = g_urResult->ur_type;
-    }
-    // keystone hot wallet use urType Bytes
-    uint8_t mfp[4];
-    GetMasterFingerPrint(mfp);
-    if (is_keystone_xrp_tx(data)) {
-        result =  xrp_check_tx_bytes(data, mfp, sizeof(mfp), urType);
-        return result;
-    } else {
-        result = xrp_check_tx(data, GetCurrentAccountPublicKey(XPUB_TYPE_XRP), pubkey);
-    }
+    result = xrp_check_tx(data, GetCurrentAccountPublicKey(XPUB_TYPE_XRP), pubkey);
     if (result != NULL && result->error_code == 0 && strlen(result->error_message) > 0) {
         if (g_cachedPubkey[GetCurrentAccountIndex()] != NULL) {
             SRAM_FREE(g_cachedPubkey[GetCurrentAccountIndex()]);
@@ -162,18 +144,7 @@ UREncodeResult *GuiGetXrpSignQrCodeData(void)
         uint8_t seed[64];
         GetAccountSeed(GetCurrentAccountIndex(), seed, SecretCacheGetPassword());
         int len = GetMnemonicType() == MNEMONIC_TYPE_BIP39 ? sizeof(seed) : GetCurrentAccountEntropyLen();
-        if (is_keystone_xrp_tx(data)) {
-            uint8_t mfp[4] = {0};
-            GetMasterFingerPrint(mfp);
-            // sign the bytes from keystone hot wallet
-            char pubkey[XPUB_KEY_LEN] = {0};
-            if (g_cachedPubkey[GetCurrentAccountIndex()] != NULL) {
-                strcpy_s(pubkey, XPUB_KEY_LEN, g_cachedPubkey[GetCurrentAccountIndex()]);
-            }
-            encodeResult = xrp_sign_tx_bytes(data, seed, len, mfp, sizeof(mfp), GetCurrentAccountPublicKey(XPUB_TYPE_XRP));
-        } else {
-            encodeResult = xrp_sign_tx(data, g_hdPath, seed, len);
-        }
+        encodeResult = xrp_sign_tx(data, g_hdPath, seed, len);
         ClearSecretCache();
         CHECK_CHAIN_BREAK(encodeResult);
     } while (0);

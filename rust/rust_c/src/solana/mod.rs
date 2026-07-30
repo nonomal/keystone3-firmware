@@ -10,7 +10,7 @@ use app_solana::errors::SolanaError;
 use app_solana::parse_message;
 use cty::c_char;
 use structs::{DisplaySolanaMessage, DisplaySolanaTx};
-use ur_registry::solana::sol_sign_request::SolSignRequest;
+use ur_registry::solana::sol_sign_request::{SignType, SolSignRequest};
 use ur_registry::solana::sol_signature::SolSignature;
 use ur_registry::traits::RegistryItem;
 
@@ -18,6 +18,22 @@ pub mod structs;
 
 unsafe fn build_sign_result(ptr: PtrUR, seed: &[u8]) -> Result<SolSignature, SolanaError> {
     let sign_request = extract_ptr_with_type!(ptr, SolSignRequest);
+    let sign_data = sign_request.get_sign_data();
+    let sign_type = sign_request.get_sign_type();
+    let is_complete_transaction = match sign_type {
+        // Exact parsing is performed together with the required-signer check below,
+        // avoiding a second full transaction parse on the normal signing path.
+        SignType::Transaction => true,
+        SignType::Message => {
+            let is_complete_transaction = app_solana::validate_tx(&mut sign_data.clone());
+            if !is_complete_transaction && app_solana::has_tx_prefix(&mut sign_data.clone()) {
+                return Err(SolanaError::InvalidData(
+                    "message contains a transaction prefix with hidden trailing data".to_string(),
+                ));
+            }
+            is_complete_transaction
+        }
+    };
     let mut path =
         sign_request
             .get_derivation_path()
@@ -28,7 +44,11 @@ unsafe fn build_sign_result(ptr: PtrUR, seed: &[u8]) -> Result<SolSignature, Sol
     if !path.starts_with("m/") {
         path = format!("m/{path}");
     }
-    let signature = app_solana::sign(sign_request.get_sign_data().to_vec(), &path, seed)?;
+    if is_complete_transaction {
+        let signer = app_solana::get_public_key(seed, &path)?;
+        app_solana::validate_tx_signer(&mut sign_data.clone(), &signer)?;
+    }
+    let signature = app_solana::sign(sign_data, &path, seed)?;
     Ok(SolSignature::new(
         sign_request.get_request_id(),
         signature.to_vec(),
@@ -84,6 +104,32 @@ pub unsafe extern "C" fn solana_parse_tx(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn solana_parse_tx_with_pubkey(
+    ptr: PtrUR,
+    pubkey: PtrString,
+) -> PtrT<TransactionParseResult<DisplaySolanaTx>> {
+    let solan_sign_reqeust = extract_ptr_with_type!(ptr, SolSignRequest);
+    let tx_hex = solan_sign_reqeust.get_sign_data();
+    let pubkey = recover_c_char(pubkey);
+    let signer: [u8; 32] = match hex::decode(pubkey)
+        .ok()
+        .and_then(|value| value.try_into().ok())
+    {
+        Some(value) => value,
+        None => {
+            return TransactionParseResult::from(SolanaError::InvalidData(
+                "invalid Solana signer public key".to_string(),
+            ))
+            .c_ptr()
+        }
+    };
+    match app_solana::parse_for_signer(&tx_hex.to_vec(), &signer) {
+        Ok(v) => TransactionParseResult::success(DisplaySolanaTx::from(v).c_ptr()).c_ptr(),
+        Err(e) => TransactionParseResult::from(e).c_ptr(),
+    }
+}
+
+#[no_mangle]
 // this function is used to sign the tx and message
 pub unsafe extern "C" fn solana_sign_tx(
     ptr: PtrUR,
@@ -119,7 +165,7 @@ pub unsafe extern "C" fn solana_parse_message(
     let sol_sign_request = extract_ptr_with_type!(ptr, SolSignRequest);
     let pubkey = recover_c_char(pubkey);
     // verify whether the UR is message to prevent using the tx as message
-    if app_solana::validate_tx(&mut sol_sign_request.get_sign_data()) {
+    if app_solana::has_tx_prefix(&mut sol_sign_request.get_sign_data()) {
         return TransactionParseResult::from(RustCError::UnsupportedTransaction(
             "Transaction".to_string(),
         ))

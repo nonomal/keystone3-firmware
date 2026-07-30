@@ -1,4 +1,8 @@
 #include "gui_eth_batch_tx_widgets.h"
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
 #include "keystore.h"
 #include "gui.h"
 #include "gui_page.h"
@@ -39,6 +43,9 @@
 
 #define QRCODE_CONFIRM_SIGN_PROCESS 66
 #define FINGER_SIGN_MAX_COUNT 5
+#define ETH_BATCH_AMOUNT_MAX_LEN 80
+#define ETH_BATCH_ASSET_MAX_LEN 32
+#define ETH_BATCH_ASSET_AMOUNT_BUFFER_SIZE (ETH_BATCH_AMOUNT_MAX_LEN + ETH_BATCH_ASSET_MAX_LEN + 2)
 
 static URParseResult *g_urResult = NULL;
 static URParseMultiResult *g_urMultiResult = NULL;
@@ -85,6 +92,7 @@ static void GuiEthBatchTxNavBarRefresh();
 static void GuiRenderCurrentTransaction(bool showSwapHint, bool showSignSlider);
 static void GuiRenderTransactionFrame(lv_obj_t *parent);
 static void GuiRenderBottomBtn(lv_obj_t *parent, bool showSignSlider);
+static const lv_font_t *GetEthBatchAmountFont(const char *value);
 
 static bool HandleCurrentTransaction(uint32_t index);
 static void HandleCurrentTransactionParseFail(uint32_t errorCode, const char *errorMessage);
@@ -265,17 +273,21 @@ static void ParseErc20ContractData(const char* inputData, const uint8_t decimals
 
 void GuiEthBatchTxWidgetsRefresh()
 {
-    if (g_parseResult -> error_code == 0) {
-        GuiEthBatchTxNavBarRefresh();
-        if (!HandleCurrentTransaction(g_currentTxIndex)) {
-            return;
-        }
-
-        bool showSwapHint = g_currentTxIndex == 0 && g_txCount > 1;
-        bool showSignSlider = g_currentTxIndex == g_txCount - 1;
-
-        GuiRenderCurrentTransaction(showSwapHint, showSignSlider);
+    if (g_parseResult == NULL || g_parseResult->error_code != 0 ||
+        g_displayEthBatchTx == NULL || g_displayEthBatchTx->txs == NULL ||
+        g_displayEthBatchTx->txs->data == NULL || g_txCount == 0 ||
+        g_currentTxIndex >= g_txCount) {
+        return;
     }
+
+    GuiEthBatchTxNavBarRefresh();
+    if (!HandleCurrentTransaction(g_currentTxIndex)) {
+        return;
+    }
+
+    bool showSwapHint = g_currentTxIndex == 0 && g_txCount > 1;
+    bool showSignSlider = g_currentTxIndex == g_txCount - 1;
+    GuiRenderCurrentTransaction(showSwapHint, showSignSlider);
 }
 
 static void GuiReturnHome()
@@ -400,7 +412,9 @@ void GuiEthBatchTxWidgetsSignDealFingerRecognize(void *param)
 void GuiEthBatchTxWidgetsTransactionParseFail(void* params)
 {
     printf("GuiEthBatchTxWidgetsTransactionParseFail\n");
-    printf("error: %s\n", g_parseResult->error_message);
+    if (g_parseResult != NULL && g_parseResult->error_message != NULL) {
+        printf("error: %s\n", g_parseResult->error_message);
+    }
     g_parseErrorHintBox = GuiCreateErrorCodeWindow(ERR_INVALID_QRCODE, &g_parseErrorHintBox, GuiReturnHome);
 }
 
@@ -427,6 +441,11 @@ static bool HandleCurrentTransaction(uint32_t index)
 
     g_currentTransaction = &g_displayEthBatchTx->txs->data[g_currentTxIndex];
     g_currentNetwork = FindEvmNetwork(g_currentTransaction->chain_id);
+    if (g_currentTransaction->detail->input == NULL ||
+        g_currentTransaction->detail->input[0] == '\0') {
+        return true;
+    }
+
     g_currentErc20Contract = FindErc20Contract(g_currentTransaction->overview->to);
     if (g_currentErc20Contract == NULL) {
         ParseSwapContractData(g_currentTransaction->overview->to, g_currentTransaction->detail->input);
@@ -445,8 +464,21 @@ static bool HandleCurrentTransaction(uint32_t index)
     return true;
 }
 
-void GuiEthBatchTxWidgetsTransactionParseSuccess()
+void GuiEthBatchTxWidgetsTransactionParseSuccess(void *params)
 {
+#ifdef COMPILE_SIMULATOR
+    // Simulator signals are dispatched synchronously with the parser result pointer.
+    g_parseResult = (TransactionParseResult_DisplayETHBatchTx *)params;
+#else
+    (void)params;
+#endif
+    if (g_parseResult == NULL || g_parseResult->error_code != 0 ||
+        g_parseResult->data == NULL || g_parseResult->data->txs == NULL ||
+        g_parseResult->data->txs->data == NULL || g_parseResult->data->txs->size == 0) {
+        GuiEthBatchTxWidgetsTransactionParseFail(NULL);
+        return;
+    }
+
     g_displayEthBatchTx = g_parseResult->data;
     g_txCount = g_displayEthBatchTx->txs->size;
 
@@ -502,12 +534,45 @@ static void GuiEthBatchTxNavBarRefresh()
     }
 }
 
+static bool FormatAssetAmount(char *output, size_t outputSize, const char *amount, const char *asset)
+{
+    if (output == NULL || outputSize == 0 || amount == NULL || asset == NULL) {
+        return false;
+    }
+
+    size_t amountLen = strnlen_s(amount, ETH_BATCH_AMOUNT_MAX_LEN + 1);
+    size_t assetLen = strnlen_s(asset, ETH_BATCH_ASSET_MAX_LEN + 1);
+    if (amountLen > ETH_BATCH_AMOUNT_MAX_LEN || assetLen > ETH_BATCH_ASSET_MAX_LEN) {
+        output[0] = '\0';
+        return false;
+    }
+
+    int written = snprintf(output, outputSize, "%s %s", amount, asset);
+    if (written < 0 || (size_t)written >= outputSize) {
+        output[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
+static const lv_font_t *GetEthBatchAmountFont(const char *value)
+{
+    size_t length = strlen(value);
+    if (length <= 24) {
+        return g_defLittleTitleFont;
+    }
+    if (length <= 40) {
+        return g_defTextFont;
+    }
+    return g_defIllustrateFont;
+}
+
 // GUI Impelementation Part
 static lv_obj_t* GuiRenderSwapSummary(lv_obj_t *parent, const char* from_asset, const char* from_amount, const char* to_asset)
 {
-    char* text = malloc(BUFFER_SIZE_128);
-    sprintf(text, "%s %s", from_amount, from_asset);
-    return CreateTransactionOvewviewCard(parent, _("Swap"), text, _("To"), to_asset);
+    char text[ETH_BATCH_ASSET_AMOUNT_BUFFER_SIZE] = {0};
+    bool formatted = FormatAssetAmount(text, sizeof(text), from_amount, from_asset);
+    return CreateTransactionOvewviewCard(parent, _("Swap"), formatted ? text : _("Invalid Amount"), _("To"), to_asset);
 }
 
 static lv_obj_t *GuiRenderUnknownErc20SwapSummary(lv_obj_t *parent, const char* from_asset, const char* from_amount, const char* to_asset)
@@ -522,12 +587,7 @@ static lv_obj_t *GuiRenderUnknownErc20SwapSummary(lv_obj_t *parent, const char* 
 
 static lv_obj_t *GuiRenderApprove(lv_obj_t *parent, const bool showAmount, lv_obj_t *last_view)
 {
-    char* text = malloc(BUFFER_SIZE_32);
-    if (showAmount) {
-        text = "Approve";
-    } else {
-        text = "Revoke";
-    }
+    const char *text = showAmount ? "Approve" : "Revoke";
     last_view = CreateTransactionItemView(parent, _("Operation"), text, last_view);
 
     lv_obj_t *container = CreateTransactionContentContainer(parent, 408, 290);
@@ -548,10 +608,9 @@ static lv_obj_t *GuiRenderApprove(lv_obj_t *parent, const bool showAmount, lv_ob
         lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 100);
         lv_obj_set_style_text_opa(label, LV_OPA_64, LV_PART_MAIN);
 
-        char* amount = malloc(BUFFER_SIZE_64);
-        sprintf(amount, "%s %s", g_parseErc20Approval->data->value, g_currentErc20Contract->symbol);
-
-        label = GuiCreateIllustrateLabel(container, amount);
+        char amount[ETH_BATCH_ASSET_AMOUNT_BUFFER_SIZE] = {0};
+        bool formatted = FormatAssetAmount(amount, sizeof(amount), g_parseErc20Approval->data->value, g_currentErc20Contract->symbol);
+        label = GuiCreateIllustrateLabel(container, formatted ? amount : _("Invalid Amount"));
         lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 138);
     } else {
         label = GuiCreateIllustrateLabel(container, _("Token"));
@@ -583,13 +642,16 @@ static void GuiRenderApprovalOverview(lv_obj_t *parent, bool showSwapHint)
     if (strcmp(g_parseErc20Approval->data->value, "0") != 0) {
         showAmount = true;
     }
-    char* text = malloc(BUFFER_SIZE_32);
-    if (showAmount) {
-        text = "Approve";
-    } else {
-        text = "Revoke";
-    }
+    const char *text = showAmount ? "Approve" : "Revoke";
     last_view = CreateTransactionItemView(parent, _("Operation"), text, last_view);
+
+    char nativeValue[ETH_BATCH_ASSET_AMOUNT_BUFFER_SIZE] = {0};
+    bool nativeValueFormatted = FormatAssetAmount(nativeValue, sizeof(nativeValue),
+                                                  g_currentTransaction->overview->value,
+                                                  g_currentNetwork.symbol);
+    last_view = CreateTransactionItemView(parent, _("Native Transfer"),
+                                          nativeValueFormatted ? nativeValue : _("Invalid Amount"),
+                                          last_view);
 
     lv_obj_t *container = CreateRelativeTransactionContentContainer(parent, 408, 290, last_view);
 
@@ -607,10 +669,9 @@ static void GuiRenderApprovalOverview(lv_obj_t *parent, bool showSwapHint)
         lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 100);
         lv_obj_set_style_text_opa(label, LV_OPA_64, LV_PART_MAIN);
 
-        char* amount = malloc(BUFFER_SIZE_64);
-        sprintf(amount, "%s %s", g_parseErc20Approval->data->value, g_currentErc20Contract->symbol);
-
-        label = GuiCreateIllustrateLabel(container, amount);
+        char amount[ETH_BATCH_ASSET_AMOUNT_BUFFER_SIZE] = {0};
+        bool formatted = FormatAssetAmount(amount, sizeof(amount), g_parseErc20Approval->data->value, g_currentErc20Contract->symbol);
+        label = GuiCreateIllustrateLabel(container, formatted ? amount : _("Invalid Amount"));
         lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 138);
     } else {
         label = GuiCreateIllustrateLabel(container, _("Token"));
@@ -707,6 +768,15 @@ static void GuiRenderSwapOverview(lv_obj_t *parent)
     } else {
         last_view = GuiRenderUnknownErc20SwapSummary(parent, g_swapkitContractData->data->swap_in_asset, g_swapkitContractData->data->swap_in_amount, g_swapkitContractData->data->swap_out_asset);
     }
+
+    char nativeValue[ETH_BATCH_ASSET_AMOUNT_BUFFER_SIZE] = {0};
+    bool nativeValueFormatted = FormatAssetAmount(nativeValue, sizeof(nativeValue),
+                                                  g_currentTransaction->overview->value,
+                                                  g_currentNetwork.symbol);
+    last_view = CreateTransactionItemView(parent, _("Native Transfer"),
+                                          nativeValueFormatted ? nativeValue : _("Invalid Amount"),
+                                          last_view);
+
     if (erc20Contract != NULL) {
         free(erc20Contract);
         erc20Contract = NULL;
@@ -735,7 +805,8 @@ static void GuiRenderGeneralOverview(lv_obj_t *parent)
 {
     lv_obj_t *last_view = NULL;
 
-    last_view = CreateTransactionOvewviewCard(parent, _("Value"), g_currentTransaction->overview->value, _("Max Txn Fee"), g_currentTransaction->overview->max_txn_fee);
+    const char *valueTitle = strlen(g_currentTransaction->detail->input) > 0 ? _("Native Transfer") : _("Value");
+    last_view = CreateTransactionOvewviewCard(parent, valueTitle, g_currentTransaction->overview->value, _("Max Txn Fee"), g_currentTransaction->overview->max_txn_fee);
 
     last_view = CreateTransactionItemView(parent, _("Network"), g_currentNetwork.name, last_view);
 
@@ -771,18 +842,31 @@ static lv_obj_t *GuiRenderDetailTransactionInfoCard(lv_obj_t *parent, lv_obj_t *
 
     lv_obj_t *titleLabel, *valueLabel;
 
-    titleLabel = GuiCreateIllustrateLabel(container, _("Value"));
+    const char *valueTitle = strlen(g_currentTransaction->detail->input) > 0 ? _("Native Transfer") : _("Value");
+    titleLabel = GuiCreateIllustrateLabel(container, valueTitle);
     lv_obj_set_style_text_opa(titleLabel, LV_OPA_64, LV_PART_MAIN);
     lv_obj_align(titleLabel, LV_ALIGN_TOP_LEFT, 24, height);
 
-    char* value = malloc(BUFFER_SIZE_32);
-    sprintf(value, "%s %s", g_currentTransaction->detail->value, g_currentNetwork.symbol);
-
-    valueLabel = GuiCreateIllustrateLabel(container, value);
-    lv_obj_align_to(valueLabel, titleLabel, LV_ALIGN_OUT_RIGHT_MID, 16, 0);
+    char value[ETH_BATCH_ASSET_AMOUNT_BUFFER_SIZE] = {0};
+    bool formatted = FormatAssetAmount(value, sizeof(value), g_currentTransaction->detail->value, g_currentNetwork.symbol);
+    const char *displayValue = formatted ? value : _("Invalid Amount");
+    valueLabel = GuiCreateLabelWithFont(container, displayValue, GetEthBatchAmountFont(displayValue));
     lv_obj_set_style_text_color(valueLabel, ORANGE_COLOR, LV_PART_MAIN);
+    lv_obj_update_layout(titleLabel);
+    lv_obj_update_layout(valueLabel);
 
-    height += 30 + 8;
+    uint16_t titleWidth = lv_obj_get_width(titleLabel);
+    uint16_t valueWidth = lv_obj_get_width(valueLabel);
+    if (24 + titleWidth + 16 + valueWidth + 24 <= 408) {
+        lv_obj_align_to(valueLabel, titleLabel, LV_ALIGN_OUT_RIGHT_MID, 16, 0);
+        height += 30 + 8;
+    } else {
+        lv_obj_align_to(valueLabel, titleLabel, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 0);
+        lv_obj_set_width(valueLabel, 360);
+        lv_label_set_long_mode(valueLabel, LV_LABEL_LONG_WRAP);
+        lv_obj_update_layout(valueLabel);
+        height += lv_obj_get_height(titleLabel) + lv_obj_get_height(valueLabel) + 8;
+    }
 
     titleLabel = GuiCreateIllustrateLabel(container, _("Max Fee"));
     lv_obj_set_style_text_opa(titleLabel, LV_OPA_64, LV_PART_MAIN);
@@ -955,8 +1039,7 @@ static lv_obj_t *GuiRenderDetailInputData(lv_obj_t *parent, lv_obj_t *last_view)
     lv_obj_t *container = CreateRelativeTransactionContentContainer(parent, 408, 0, last_view);
 
     uint16_t height = 16;
-
-    char* input_data = malloc(BUFFER_SIZE_128);
+    char input_data[BUFFER_SIZE_128] = {0};
 
     if (strlen(g_currentTransaction->detail->input) > 51) {
         char data[49];
@@ -968,12 +1051,14 @@ static lv_obj_t *GuiRenderDetailInputData(lv_obj_t *parent, lv_obj_t *last_view)
     }
 
     lv_obj_t *label = GuiCreateIllustrateLabel(container, input_data);
-    lv_obj_align_to(label, last_view, LV_ALIGN_OUT_BOTTOM_LEFT, 0, height);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, height);
+    lv_obj_set_width(label, 360);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
     lv_obj_update_layout(label);
     height += lv_obj_get_height(label) + 8;
 
     label = GuiCreateIllustrateLabel(container, _("Unknown Data"));
-    lv_obj_align_to(label, last_view, LV_ALIGN_OUT_BOTTOM_LEFT, 0, height);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, height);
     lv_obj_set_style_text_color(label, YELLOW_COLOR, LV_PART_MAIN);
     lv_obj_update_layout(label);
     height += lv_obj_get_height(label);
@@ -998,10 +1083,13 @@ static void GuiRenderDetail(lv_obj_t *parent)
 
     last_view = GuiRenderDetailFromTo(parent, last_view);
 
-    if (g_contractData != NULL && g_contractData->error_code == 0) {
-        last_view = GuiRenderDetailContractData(parent, last_view);
-    } else {
-        last_view = GuiRenderDetailInputData(parent, last_view);
+    if (g_currentTransaction->detail->input != NULL &&
+        g_currentTransaction->detail->input[0] != '\0') {
+        if (g_contractData != NULL && g_contractData->error_code == 0) {
+            last_view = GuiRenderDetailContractData(parent, last_view);
+        } else {
+            last_view = GuiRenderDetailInputData(parent, last_view);
+        }
     }
 }
 

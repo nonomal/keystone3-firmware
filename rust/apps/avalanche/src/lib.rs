@@ -7,7 +7,7 @@ use alloc::{string::ToString, vec::Vec};
 
 pub use address::get_address;
 use bytes::{Buf, Bytes};
-use transactions::tx_header::Header;
+use transactions::{structs::ParsedSizeAble, tx_header::Header};
 
 use crate::errors::{AvaxError, Result};
 use core::convert::TryFrom;
@@ -26,11 +26,15 @@ use transactions::type_id::TypeId;
 
 pub fn parse_avax_tx<T>(data: Vec<u8>) -> Result<T>
 where
-    T: TryFrom<Bytes>,
+    T: TryFrom<Bytes> + ParsedSizeAble,
 {
+    let input_len = data.len();
     let bytes = Bytes::from(data);
     match T::try_from(bytes) {
-        Ok(data) => Ok(data),
+        Ok(data) if data.parsed_size() == input_len => Ok(data),
+        Ok(_) => Err(AvaxError::InvalidTransaction(
+            "unexpected trailing data".to_string(),
+        )),
         Err(_) => Err(AvaxError::InvalidInput),
     }
 }

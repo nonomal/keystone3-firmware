@@ -169,6 +169,7 @@ mod test {
                     .collect(),
                 network: $network.to_string(),
                 fee_larger_than_amount: $fee_larger_than_amount,
+                is_large_fee: false,
                 sign_status: Some("Unsigned".to_string()),
                 is_multisig: false,
                 need_sign: true,

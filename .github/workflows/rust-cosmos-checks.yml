@@ -27,4 +27,4 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Run rust/apps/cosmos
-        run: cd rust/apps/cosmos && cargo +$RUST_TOOLCHAIN llvm-cov --fail-under-regions 77 --fail-under-functions 62 --fail-under-lines 74 --ignore-filename-regex 'keystore/*|utils/*'
+        run: cd rust/apps/cosmos && cargo +$RUST_TOOLCHAIN llvm-cov --fail-under-regions 79 --fail-under-functions 63 --fail-under-lines 76 --ignore-filename-regex 'keystore/*|utils/*'

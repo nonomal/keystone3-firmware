@@ -161,7 +161,6 @@ pub fn parse_data_item(serial: &[u8]) -> Result<DataItem> {
 mod tests {
     use super::*;
     use alloc::borrow::ToOwned;
-    use hex::ToHex;
     use {hex, rsa::PublicKeyParts};
 
     #[test]

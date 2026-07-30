@@ -50,7 +50,7 @@ impl Encodable for TransactionAction {
 
 #[derive(Clone, Debug)]
 pub struct ParsedEthereumTransaction {
-    pub nonce: u32,
+    pub nonce: String,
     pub chain_id: u64,
     pub from: Option<String>,
     pub to: String,
@@ -169,6 +169,7 @@ pub struct TypedData {
     pub from: Option<String>,
     pub domain_separator: String,
     pub message_hash: String,
+    pub safe_tx_hash: String,
 }
 
 impl TypedData {
@@ -180,84 +181,89 @@ impl TypedData {
     }
 
     pub fn from_raw(data: Eip712TypedData, from: Option<PublicKey>) -> Result<Self> {
-        Self::from(Into::into(data), from)
+        let mut data = Self::try_from(data)
+            .map_err(|e| crate::errors::EthereumError::HashTypedDataError(e.to_string()))?;
+        data.safe_tx_hash = data.get_safe_tx_hash()?;
+        Self::from(data, from)
     }
 
-    pub fn get_safe_tx_hash(&self) -> String {
+    pub fn get_safe_tx_hash(&self) -> Result<String> {
         // bytes32 private constant SAFE_TX_TYPEHASH = 0xbb8310d486368db6bd6f849402fdd73ad53d316b5a4b2644ad6efe0f941286d8;
         // bytes32 safeTxHash = keccak256(
         //     abi.encode(SAFE_TX_TYPEHASH, to, value, keccak256(data), operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, _nonce)
         // );
         if self.primary_type != "SafeTx" {
-            return "".to_string();
+            return Ok("".to_string());
         }
+
+        fn error(field: &str) -> crate::errors::EthereumError {
+            crate::errors::EthereumError::HashTypedDataError(format!(
+                "invalid SafeTx field: {field}"
+            ))
+        }
+
+        fn parse_u256(message: &Value, field: &str) -> Result<U256> {
+            let value = message.get(field).ok_or_else(|| error(field))?;
+            if let Some(value) = value.as_str() {
+                return U256::from_dec_str(value).map_err(|_| error(field));
+            }
+            value.as_u64().map(U256::from).ok_or_else(|| error(field))
+        }
+
+        fn parse_address(message: &Value, field: &str) -> Result<Address> {
+            let value = message
+                .get(field)
+                .and_then(Value::as_str)
+                .ok_or_else(|| error(field))?;
+            let bytes = hex::decode(
+                value
+                    .strip_prefix("0x")
+                    .or_else(|| value.strip_prefix("0X"))
+                    .unwrap_or(value),
+            )
+            .map_err(|_| error(field))?;
+            if bytes.len() != 20 {
+                return Err(error(field));
+            }
+            Ok(Address::from_slice(&bytes))
+        }
+
+        fn parse_bytes(message: &Value, field: &str) -> Result<Vec<u8>> {
+            let value = message
+                .get(field)
+                .and_then(Value::as_str)
+                .ok_or_else(|| error(field))?;
+            hex::decode(
+                value
+                    .strip_prefix("0x")
+                    .or_else(|| value.strip_prefix("0X"))
+                    .unwrap_or(value),
+            )
+            .map_err(|_| error(field))
+        }
+
+        let message = serde_json::from_str::<Value>(&self.message).map_err(|_| error("message"))?;
+        if !message.is_object() {
+            return Err(error("message"));
+        }
+
         let safe_tx_typehash =
             hex::decode("bb8310d486368db6bd6f849402fdd73ad53d316b5a4b2644ad6efe0f941286d8")
-                .unwrap();
-        let message = serde_json::from_str::<Value>(&self.message).unwrap_or_default();
-
-        let value_str = message["value"].as_str().unwrap_or_default();
-        let value = U256::from_dec_str(value_str).unwrap_or_default();
-
-        let data = hex::decode(
-            message["data"]
-                .as_str()
-                .unwrap_or_default()
-                .trim_start_matches("0x"),
-        )
-        .unwrap_or_default();
+                .map_err(|_| error("typehash"))?;
+        let value = parse_u256(&message, "value")?;
+        let data = parse_bytes(&message, "data")?;
         let data_hash = keccak256(&data);
-
-        let to_hex = message["to"]
-            .as_str()
-            .unwrap_or_default()
-            .trim_start_matches("0x");
-        let to_addr = hex::decode(to_hex).unwrap_or_default();
-        let to_token = Token::Address(Address::from_slice(&to_addr));
-
-        let operation = if let Some(op_str) = message["operation"].as_str() {
-            U256::from_dec_str(op_str).unwrap_or_default()
-        } else {
-            U256::from(message["operation"].as_u64().unwrap_or_default())
-        };
-
-        let safe_tx_gas = if let Some(gas_str) = message["safeTxGas"].as_str() {
-            U256::from_dec_str(gas_str).unwrap_or_default()
-        } else {
-            U256::from(message["safeTxGas"].as_u64().unwrap_or_default())
-        };
-
-        let base_gas = if let Some(gas_str) = message["baseGas"].as_str() {
-            U256::from_dec_str(gas_str).unwrap_or_default()
-        } else {
-            U256::from(message["baseGas"].as_u64().unwrap_or_default())
-        };
-
-        let gas_price = if let Some(price_str) = message["gasPrice"].as_str() {
-            U256::from_dec_str(price_str).unwrap_or_default()
-        } else {
-            U256::from(message["gasPrice"].as_u64().unwrap_or_default())
-        };
-
-        let nonce = if let Some(nonce_str) = message["nonce"].as_str() {
-            U256::from_dec_str(nonce_str).unwrap_or_default()
-        } else {
-            U256::from(message["nonce"].as_u64().unwrap_or_default())
-        };
-
-        let gas_token_addr = message["gasToken"]
-            .as_str()
-            .unwrap_or_default()
-            .trim_start_matches("0x");
-        let gas_token_addr = hex::decode(gas_token_addr).unwrap_or_default();
-        let gas_token_token = Token::Address(Address::from_slice(&gas_token_addr));
-
-        let refund_receiver_addr = message["refundReceiver"]
-            .as_str()
-            .unwrap_or_default()
-            .trim_start_matches("0x");
-        let refund_receiver_addr = hex::decode(refund_receiver_addr).unwrap_or_default();
-        let refund_receiver_token = Token::Address(Address::from_slice(&refund_receiver_addr));
+        let to_token = Token::Address(parse_address(&message, "to")?);
+        let operation = parse_u256(&message, "operation")?;
+        if operation > U256::from(1u8) {
+            return Err(error("operation"));
+        }
+        let safe_tx_gas = parse_u256(&message, "safeTxGas")?;
+        let base_gas = parse_u256(&message, "baseGas")?;
+        let gas_price = parse_u256(&message, "gasPrice")?;
+        let nonce = parse_u256(&message, "nonce")?;
+        let gas_token_token = Token::Address(parse_address(&message, "gasToken")?);
+        let refund_receiver_token = Token::Address(parse_address(&message, "refundReceiver")?);
 
         let tokens = vec![
             Token::FixedBytes(safe_tx_typehash),
@@ -279,15 +285,23 @@ impl TypedData {
 
         // Convert to hex string with 0x prefix
         // return abi.encodePacked(byte(0x19), byte(0x01), domainSeparator, safeTxHash);
-        let domain_separator =
-            hex::decode(self.domain_separator.trim_start_matches("0x")).unwrap_or_default();
+        let domain_separator = hex::decode(
+            self.domain_separator
+                .strip_prefix("0x")
+                .or_else(|| self.domain_separator.strip_prefix("0X"))
+                .unwrap_or(&self.domain_separator),
+        )
+        .map_err(|_| error("domainSeparator"))?;
+        if domain_separator.len() != 32 {
+            return Err(error("domainSeparator"));
+        }
         let mut transaction_data = Vec::new();
         transaction_data.push(0x19);
         transaction_data.push(0x01);
         transaction_data.extend_from_slice(&domain_separator);
         transaction_data.extend_from_slice(&safe_tx_hash);
         let transaction_hash = keccak256(&transaction_data);
-        format!("0x{}", hex::encode(transaction_hash))
+        Ok(format!("0x{}", hex::encode(transaction_hash)))
     }
 }
 
@@ -298,6 +312,7 @@ pub mod tests {
 
     extern crate std;
     use crate::structs::TypedData;
+    use serde_json::Value;
     use std::string::ToString;
     #[test]
     fn test_signature() {
@@ -313,6 +328,17 @@ pub mod tests {
             let signature = EthereumSignature(1, [0u8; 64]);
             assert_eq!("0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001", hex::encode(signature.serialize()))
         }
+    }
+
+    #[test]
+    fn test_decoder_error_conversion() {
+        let error: crate::errors::EthereumError =
+            rlp::DecoderError::Custom("invalid test rlp").into();
+        assert!(matches!(
+            error,
+            crate::errors::EthereumError::RlpDecodingError(message)
+                if message.contains("invalid test rlp")
+        ));
     }
 
     #[test]
@@ -344,10 +370,44 @@ pub mod tests {
                 .to_string(),
             message_hash: "0x2760e0669e7dbd5a2a9f695bac8db1432400df52a9895d8eae50d94dcb82976b"
                 .to_string(),
+            safe_tx_hash: "".to_string(),
         };
         assert_eq!(
-            typed_data.get_safe_tx_hash(),
+            typed_data.get_safe_tx_hash().unwrap(),
             "0x2f31649e0f48e410b00643088c8f209b1ab33871aae7150c9d7a008dda243c0a"
         );
+
+        let mut invalid_address = typed_data.clone();
+        invalid_address.message = message
+            .as_object()
+            .map(|message| {
+                let mut message = message.clone();
+                message.insert("to".to_string(), serde_json::json!("0x1234"));
+                Value::Object(message).to_string()
+            })
+            .unwrap();
+        assert!(invalid_address.get_safe_tx_hash().is_err());
+
+        let mut invalid_operation = typed_data.clone();
+        invalid_operation.message = message
+            .as_object()
+            .map(|message| {
+                let mut message = message.clone();
+                message.insert("operation".to_string(), serde_json::json!("2"));
+                Value::Object(message).to_string()
+            })
+            .unwrap();
+        assert!(invalid_operation.get_safe_tx_hash().is_err());
+
+        let mut missing_nonce = typed_data;
+        missing_nonce.message = message
+            .as_object()
+            .map(|message| {
+                let mut message = message.clone();
+                message.remove("nonce");
+                Value::Object(message).to_string()
+            })
+            .unwrap();
+        assert!(missing_nonce.get_safe_tx_hash().is_err());
     }
 }

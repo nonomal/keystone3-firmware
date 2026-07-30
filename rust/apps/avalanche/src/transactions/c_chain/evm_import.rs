@@ -53,6 +53,16 @@ pub struct ImportTx {
     outputs: LengthPrefixedVec<EvmOutput>,
 }
 
+impl ParsedSizeAble for ImportTx {
+    fn parsed_size(&self) -> usize {
+        2 + 4
+            + self.tx_header.parsed_size()
+            + BLOCKCHAIN_ID_LEN
+            + self.inputs.parsed_size()
+            + self.outputs.parsed_size()
+    }
+}
+
 impl AvaxTxInfo for ImportTx {
     fn get_total_input_amount(&self) -> u64 {
         self.inputs
@@ -118,14 +128,29 @@ impl TryFrom<Bytes> for ImportTx {
         let outputs = LengthPrefixedVec::<EvmOutput>::try_from(bytes.clone())?;
         bytes.advance(outputs.parsed_size());
 
-        Ok(ImportTx {
+        let transaction = ImportTx {
             codec_id,
             type_id,
             tx_header,
             source_chain,
             inputs,
             outputs,
-        })
+        };
+        let network_id = transaction.tx_header.get_network_id();
+        if !transaction
+            .inputs
+            .iter()
+            .all(|input| input.asset_id().is_native_avax(network_id))
+            || !transaction
+                .outputs
+                .iter()
+                .all(|output| output.asset_id.is_native_avax(network_id))
+        {
+            return Err(AvaxError::InvalidTransaction(
+                "unsupported non-AVAX asset".to_string(),
+            ));
+        }
+        Ok(transaction)
     }
 }
 

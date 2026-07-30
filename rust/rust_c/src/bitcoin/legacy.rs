@@ -7,6 +7,7 @@ use crate::common::types::{PtrBytes, PtrString, PtrT, PtrUR};
 use crate::common::ur::{QRCodeType, UREncodeResult};
 use crate::extract_array;
 use alloc::boxed::Box;
+use alloc::string::ToString;
 
 #[no_mangle]
 pub unsafe extern "C" fn utxo_parse_keystone(
@@ -16,6 +17,12 @@ pub unsafe extern "C" fn utxo_parse_keystone(
     length: u32,
     x_pub: PtrString,
 ) -> *mut TransactionParseResult<DisplayTx> {
+    if matches!(ur_type, QRCodeType::Bytes) {
+        return TransactionParseResult::from(RustCError::UnsupportedTransaction(
+            "bitcoin-family transactions are not supported via ur:bytes".to_string(),
+        ))
+        .c_ptr();
+    }
     if length != 4 {
         return TransactionParseResult::from(RustCError::InvalidMasterFingerprint).c_ptr();
     }
@@ -51,6 +58,12 @@ pub unsafe extern "C" fn utxo_sign_keystone(
     seed: PtrBytes,
     seed_len: u32,
 ) -> *mut UREncodeResult {
+    if matches!(ur_type, QRCodeType::Bytes) {
+        return UREncodeResult::from(RustCError::UnsupportedTransaction(
+            "bitcoin-family transactions are not supported via ur:bytes".to_string(),
+        ))
+        .c_ptr();
+    }
     let seed = extract_array!(seed, u8, seed_len as usize);
     keystone::sign(
         ptr,
@@ -71,5 +84,11 @@ pub unsafe extern "C" fn utxo_check_keystone(
     length: u32,
     x_pub: PtrString,
 ) -> PtrT<TransactionCheckResult> {
+    if matches!(ur_type, QRCodeType::Bytes) {
+        return TransactionCheckResult::from(RustCError::UnsupportedTransaction(
+            "bitcoin-family transactions are not supported via ur:bytes".to_string(),
+        ))
+        .c_ptr();
+    }
     keystone::check(ptr, ur_type, master_fingerprint, length, x_pub)
 }

@@ -80,7 +80,7 @@ extern bool g_reboot;
         REMAPVIEW_ETH, \
         PC_SIMULATOR_PATH "/page_eth.json", \
         GuiGetEthData, \
-        GetEthTransType, \
+        NULL, \
         FreeEthMemory, \
     }, \
     { \

@@ -18,15 +18,52 @@ impl_public_struct!(Tags {
 
 impl Tags {
     pub fn deserialize(serial: &[u8]) -> Result<Self> {
-        let mut avro_bytes = serial.to_vec();
-        let len = avro_decode_long(&mut avro_bytes)?;
+        let mut avro_bytes = serial;
         let mut tags = vec![];
-        for _i in 0..len {
-            let name = avro_decode_string(&mut avro_bytes)?;
-            let value = avro_decode_string(&mut avro_bytes)?;
-            tags.push(Tag { name, value })
+
+        loop {
+            let block_count = avro_decode_long(&mut avro_bytes)?;
+            if block_count == 0 {
+                break;
+            }
+
+            let item_count = if block_count < 0 {
+                let item_count = block_count
+                    .checked_abs()
+                    .ok_or_else(|| ArweaveError::AvroError("Invalid block count".to_string()))?
+                    as u64;
+                let block_size = avro_decode_long(&mut avro_bytes)?;
+                let block_size = usize::try_from(block_size).map_err(|_| {
+                    ArweaveError::AvroError("Invalid negative block size".to_string())
+                })?;
+                let mut block = avro_take(&mut avro_bytes, block_size)?;
+                avro_decode_tags(&mut block, item_count, &mut tags)?;
+                if !block.is_empty() {
+                    return Err(ArweaveError::AvroError(
+                        "Avro tag block contains trailing bytes".to_string(),
+                    ));
+                }
+                continue;
+            } else {
+                block_count as u64
+            };
+
+            avro_decode_tags(&mut avro_bytes, item_count, &mut tags)?;
         }
+
+        if !avro_bytes.is_empty() {
+            return Err(ArweaveError::AvroError(
+                "Avro tags contain trailing bytes".to_string(),
+            ));
+        }
+
+        let len = i64::try_from(tags.len())
+            .map_err(|_| ArweaveError::AvroError("Too many tags".to_string()))?;
         Ok(Tags { len, data: tags })
+    }
+
+    pub(crate) fn as_slice(&self) -> &[Tag] {
+        &self.data
     }
 }
 
@@ -35,20 +72,53 @@ impl_public_struct!(Tag {
     value: String
 });
 
-fn avro_decode_long(reader: &mut Vec<u8>) -> Result<i64> {
-    let mut i = 0u64;
-    let mut buf = [0u8; 1];
+impl Tag {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
 
-    let mut j = 0;
+    pub(crate) fn value(&self) -> &str {
+        &self.value
+    }
+}
+
+fn avro_take<'a>(reader: &mut &'a [u8], len: usize) -> Result<&'a [u8]> {
+    if len > reader.len() {
+        return Err(ArweaveError::AvroError(
+            "Unexpected end of Avro data".to_string(),
+        ));
+    }
+    let (value, rest) = reader.split_at(len);
+    *reader = rest;
+    Ok(value)
+}
+
+fn avro_decode_tags(reader: &mut &[u8], count: u64, tags: &mut Vec<Tag>) -> Result<()> {
+    for _ in 0..count {
+        let name = avro_decode_string(reader)?;
+        let value = avro_decode_string(reader)?;
+        tags.push(Tag { name, value });
+    }
+    Ok(())
+}
+
+fn avro_decode_long(reader: &mut &[u8]) -> Result<i64> {
+    let mut i = 0u64;
+
+    let mut j = 0u32;
     loop {
-        if j > 9 {
-            // if j * 7 > 64
+        if j >= 10 {
             return Err(ArweaveError::AvroError("Integer overflow".to_string()));
         }
-        let head = reader.remove(0);
-        buf[0] = head;
-        i |= (u64::from(buf[0] & 0x7F)) << (j * 7);
-        if (buf[0] >> 7) == 0 {
+
+        let head = *avro_take(reader, 1)?
+            .first()
+            .ok_or_else(|| ArweaveError::AvroError("Unexpected end of Avro data".to_string()))?;
+        if j == 9 && head > 1 {
+            return Err(ArweaveError::AvroError("Integer overflow".to_string()));
+        }
+        i |= u64::from(head & 0x7f) << (j * 7);
+        if head & 0x80 == 0 {
             break;
         } else {
             j += 1;
@@ -61,10 +131,12 @@ fn avro_decode_long(reader: &mut Vec<u8>) -> Result<i64> {
     })
 }
 
-fn avro_decode_string(reader: &mut Vec<u8>) -> Result<String> {
+fn avro_decode_string(reader: &mut &[u8]) -> Result<String> {
     let len = avro_decode_long(reader)?;
-    let buf = reader.drain(..len as usize).collect();
-    String::from_utf8(buf).map_err(|e| ArweaveError::AvroError(format!("{e}")))
+    let len = usize::try_from(len)
+        .map_err(|_| ArweaveError::AvroError("Invalid negative string length".to_string()))?;
+    let buf = avro_take(reader, len)?;
+    String::from_utf8(buf.to_vec()).map_err(|e| ArweaveError::AvroError(format!("{e}")))
 }
 
 impl_public_struct!(DataItem {
@@ -96,6 +168,10 @@ enum SignatureType {
 }
 
 impl DataItem {
+    pub(crate) fn tags_ref(&self) -> &Tags {
+        &self.tags
+    }
+
     pub fn deserialize(binary: &[u8]) -> Result<Self> {
         let mut reader = binary.to_vec();
         let signature_type =
@@ -138,8 +214,22 @@ impl DataItem {
                 |_| ArweaveError::ParseTxError("Invalid DataItem tags_number".to_string()),
             )?);
 
-        let raw_tags: Vec<u8> = reader.drain(..tags_bytes_number as usize).collect();
+        let tags_bytes_len = usize::try_from(tags_bytes_number).map_err(|_| {
+            ArweaveError::ParseTxError("DataItem tags byte length is too large".to_string())
+        })?;
+        if tags_bytes_len > reader.len() {
+            return Err(ArweaveError::ParseTxError(
+                "DataItem tags exceed remaining input".to_string(),
+            ));
+        }
+        let raw_tags: Vec<u8> = reader.drain(..tags_bytes_len).collect();
         let tags = Tags::deserialize(&raw_tags)?;
+        if tags.as_slice().len() as u64 != tags_number {
+            return Err(ArweaveError::ParseTxError(format!(
+                "DataItem tags count mismatch: expected {tags_number}, decoded {}",
+                tags.as_slice().len()
+            )));
+        }
 
         let raw_data = reader.clone();
         let data = base64_url(raw_data.clone());
@@ -181,9 +271,43 @@ impl DataItem {
 #[cfg(test)]
 mod tests {
 
-    use super::DataItem;
+    use super::{DataItem, Tags};
 
     use hex;
+
+    #[test]
+    fn test_parse_tags_across_multiple_avro_blocks() {
+        let serial = [
+            0x02, 0x12, b'R', b'e', b'c', b'i', b'p', b'i', b'e', b'n', b't', 0x02, b'A', 0x02,
+            0x10, b'Q', b'u', b'a', b'n', b't', b'i', b't', b'y', 0x04, b'1', b'0', 0x00,
+        ];
+
+        let tags = Tags::deserialize(&serial).unwrap();
+
+        assert_eq!(tags.get_len(), 2);
+        assert_eq!(tags.get_data()[0].get_name(), "Recipient");
+        assert_eq!(tags.get_data()[0].get_value(), "A");
+        assert_eq!(tags.get_data()[1].get_name(), "Quantity");
+        assert_eq!(tags.get_data()[1].get_value(), "10");
+    }
+
+    #[test]
+    fn test_parse_negative_count_avro_block() {
+        let serial = [
+            0x01, 0x18, 0x12, b'R', b'e', b'c', b'i', b'p', b'i', b'e', b'n', b't', 0x02, b'A',
+            0x00,
+        ];
+
+        let tags = Tags::deserialize(&serial).unwrap();
+
+        assert_eq!(tags.get_len(), 1);
+        assert_eq!(tags.get_data()[0].get_name(), "Recipient");
+    }
+
+    #[test]
+    fn test_reject_trailing_avro_tag_bytes() {
+        assert!(Tags::deserialize(&[0x00, 0x02]).is_err());
+    }
 
     #[test]
     fn test_parse_data_item() {

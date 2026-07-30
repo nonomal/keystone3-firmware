@@ -66,3 +66,16 @@ pub(crate) fn find_token(token_id: &str) -> Option<TokenInfo> {
         .find(|v| v.get_token_id().eq(token_id))
         .cloned()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_lookup_and_quantity_conversion() {
+        let token = find_token("xU9zFkq3X2ZQ6olwNVvr1vUWIjc3kXTWr7xKQD6dh10").unwrap();
+        assert_eq!(token.convert_quantity("10000000000").unwrap(), "0.01 AR");
+        assert!(token.convert_quantity("invalid").is_err());
+        assert!(find_token("unknown").is_none());
+    }
+}

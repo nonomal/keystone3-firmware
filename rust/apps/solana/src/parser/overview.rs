@@ -7,6 +7,8 @@ pub struct ProgramOverviewTransfer {
     pub main_action: String,
     pub from: String,
     pub to: String,
+    pub to_in_lookup_table: bool,
+    pub to_lookup_table_reference: String,
 }
 
 #[derive(Debug, Clone)]
@@ -19,6 +21,7 @@ pub struct ProgramOverviewSplTokenTransfer {
     pub token_mint_account: String,
     pub token_symbol: String,
     pub token_name: String,
+    pub unusual_decimals: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +35,19 @@ pub struct ProgramOverviewVote {
 pub struct ProgramOverviewGeneral {
     pub program: String,
     pub method: String,
+    pub value: String,
+    pub from: String,
+    pub to: String,
+    pub amount: String,
+    pub source: String,
+    pub destination: String,
+    pub authority: String,
+    pub token: String,
+    pub mint: String,
+    pub unusual_decimals: bool,
+    pub decimals: u8,
+    pub to_in_lookup_table: bool,
+    pub to_lookup_table_reference: String,
 }
 
 #[derive(Debug, Clone)]

@@ -16,9 +16,35 @@
 #include "cjson/cJSON.h"
 #include "gui_hintbox.h"
 #include "gui_views.h"
+#include "gui_chain_components.h"
 
 static void decodeEthContractData(void *parseResult);
 static bool GetEthErc20ContractData(void *parseResult);
+static lv_obj_t *CreateEthOverviewValueView(lv_obj_t *parent, DisplayETH *eth, lv_obj_t *lastView);
+static uint16_t CreateEthOverviewValueRow(lv_obj_t *container, const char *title, const char *value, uint16_t y);
+static lv_obj_t *CreateEthOverviewNetworkView(lv_obj_t *parent, DisplayETH *eth, lv_obj_t *lastView);
+static lv_obj_t *CreateEthAddressView(lv_obj_t *parent, DisplayETH *eth, lv_obj_t *lastView, bool details);
+static lv_obj_t *CreateEthDetailsFeeView(lv_obj_t *parent, DisplayETH *eth, lv_obj_t *lastView);
+static lv_obj_t *CreateEthDetailsContractViews(lv_obj_t *parent, DisplayETH *eth, lv_obj_t *lastView);
+static lv_obj_t *CreateEthDetailsRawDataButton(lv_obj_t *parent, lv_obj_t *lastView);
+static void GetEthValue(void *indata, void *param, uint32_t maxLen);
+static void GetEthValueTitle(void *indata, void *param, uint32_t maxLen);
+static void GetEthTxFee(void *indata, void *param, uint32_t maxLen);
+static void GetEthNetWork(void *indata, void *param, uint32_t maxLen);
+static void GetEthMaxFee(void *indata, void *param, uint32_t maxLen);
+static void GetEthMaxPriority(void *indata, void *param, uint32_t maxLen);
+static void GetEthMaxFeePrice(void *indata, void *param, uint32_t maxLen);
+static void GetEthMaxPriorityFeePrice(void *indata, void *param, uint32_t maxLen);
+static void GetEthGetFromAddress(void *indata, void *param, uint32_t maxLen);
+static void GetEthGetToAddress(void *indata, void *param, uint32_t maxLen);
+static void GetEthGetDetailPageToAddress(void *indata, void *param, uint32_t maxLen);
+static void GetEthToFromSize(uint16_t *width, uint16_t *height, void *param);
+static void GetEthTransactionData(void *indata, void *param, uint32_t maxLen);
+static void GetEthMethodName(void *indata, void *param, uint32_t maxLen);
+static void GetEthContractName(void *indata, void *param, uint32_t maxLen);
+static void EthContractLearnMore(lv_event_t *e);
+static void EthContractCheckRawData(lv_event_t *e);
+static bool ParseSafeTxOperation(const cJSON *json, bool *isOperation);
 
 static bool g_isMulti = false;
 static URParseResult *g_urResult = NULL;
@@ -645,6 +671,7 @@ const static Erc20Contract_t ERC20_CONTRACTS[] = {
 extern const ABIItem_t ethereum_abi_map[];
 
 static uint8_t GetEthPublickeyIndex(char* rootPath);
+void FreeContractData(void);
 
 void GuiSetEthUrData(URParseResult *urResult, URParseMultiResult *urMultiResult, bool multi)
 {
@@ -684,34 +711,14 @@ static UREncodeResult *GetEthSignDataDynamic(bool isUnlimited)
     SetLockScreen(false);
     UREncodeResult *encodeResult;
     void *data = g_isMulti ? g_urMultiResult->data : g_urResult->data;
-    // get the urType
-    enum QRCodeType urType = URTypeUnKnown;
-    if (g_isMulti) {
-        urType = g_urMultiResult->ur_type;
-    } else {
-        urType = g_urResult->ur_type;
-    }
     do {
         uint8_t seed[64];
         int len = GetMnemonicType() == MNEMONIC_TYPE_BIP39 ? sizeof(seed) : GetCurrentAccountEntropyLen();
         GetAccountSeed(GetCurrentAccountIndex(), seed, SecretCacheGetPassword());
         if (isUnlimited) {
-            if (urType == Bytes) {
-                uint8_t mfp[4] = {0};
-                GetMasterFingerPrint(mfp);
-                // sign the bytes from keystone hot wallet
-                encodeResult = eth_sign_tx_bytes(data, seed, len, mfp, sizeof(mfp));
-            } else {
-                encodeResult = eth_sign_tx_unlimited(data, seed, len);
-            }
+            encodeResult = eth_sign_tx_unlimited(data, seed, len);
         } else {
-            if (urType == Bytes) {
-                uint8_t mfp[4] = {0};
-                GetMasterFingerPrint(mfp);
-                encodeResult = eth_sign_tx_bytes(data, seed, len, mfp, sizeof(mfp));
-            } else {
-                encodeResult = eth_sign_tx(data, seed, len);
-            }
+            encodeResult = eth_sign_tx(data, seed, len);
         }
         ClearSecretCache();
         CHECK_CHAIN_BREAK(encodeResult);
@@ -723,40 +730,40 @@ static UREncodeResult *GetEthSignDataDynamic(bool isUnlimited)
 static bool isErc20Transfer(void *param)
 {
     DisplayETH *eth = (DisplayETH *)param;
-    char *input = eth->detail->input;
-    if (strnlen_s(input, 9) <= 8) {
+    if (eth == NULL || eth->detail == NULL || eth->detail->input == NULL) {
         return false;
     }
-    // FIXME: 0xa9059cbb is the method of erc20 transfer
-    // see test_transfer_function_selector_deterministic in erc20.rs for more details
-    const char *erc20Method = "a9059cbb";
-    if (strncmp(input, erc20Method, 8) == 0) {
-        return true;
+
+    const char *input = eth->detail->input;
+    const size_t erc20TransferCalldataLen = 136;
+    const char *erc20TransferSelector = "a9059cbb";
+    if (strnlen_s(input, erc20TransferCalldataLen + 1) != erc20TransferCalldataLen ||
+        strncmp(input, erc20TransferSelector, 8) != 0) {
+        return false;
     }
 
-    return false;
+    TransactionParseResult_EthParsedErc20Transaction *contract =
+        (TransactionParseResult_EthParsedErc20Transaction *)g_erc20ContractData;
+    return contract != NULL && contract->error_code == 0 && contract->data != NULL;
 }
 
-static char *CalcSymbol(void *param)
+static const char *GetErc20TransferSymbol(DisplayETH *eth)
 {
-    DisplayETH *eth = (DisplayETH *)param;
-
-    //eth->detail->to: the actual contract address;
-    if (isErc20Transfer(eth) && eth->detail->to != NULL) {
+    if (eth->detail->to != NULL) {
         for (size_t i = 0; i < NUMBER_OF_ARRAYS(ERC20_CONTRACTS); i++) {
-            Erc20Contract_t contract = ERC20_CONTRACTS[i];
-            if (strcasecmp(contract.contract_address, eth->detail->to) == 0) {
-                return contract.symbol;
+            if (strcasecmp(ERC20_CONTRACTS[i].contract_address, eth->detail->to) == 0) {
+                return ERC20_CONTRACTS[i].symbol;
             }
         }
     }
+    return "Token";
+}
 
-    if (isErc20Transfer(eth)) {
-        return "Token";
-    }
-
-    EvmNetwork_t network = FindEvmNetwork(eth->chain_id);
-    return network.symbol;
+static void GetErc20TransferValue(DisplayETH *eth, char *value, size_t valueSize)
+{
+    TransactionParseResult_EthParsedErc20Transaction *contract =
+        (TransactionParseResult_EthParsedErc20Transaction *)g_erc20ContractData;
+    snprintf_s(value, valueSize, "%s %s", contract->data->value, GetErc20TransferSymbol(eth));
 }
 
 UREncodeResult *GuiGetEthSignQrCodeData(void)
@@ -785,9 +792,48 @@ static void UpdatePermitFlag(const char *primaryType)
     }
 }
 
+static bool ParseSafeTxOperation(const cJSON *json, bool *isOperation)
+{
+    if (json == NULL || isOperation == NULL) {
+        return false;
+    }
+
+    const cJSON *operation = cJSON_GetObjectItemCaseSensitive(json, "operation");
+    if (operation == NULL) {
+        return false;
+    }
+
+    if (cJSON_IsString(operation) && operation->valuestring != NULL) {
+        if (strcmp(operation->valuestring, "0") == 0) {
+            *isOperation = false;
+            return true;
+        }
+        if (strcmp(operation->valuestring, "1") == 0) {
+            *isOperation = true;
+            return true;
+        }
+        return false;
+    }
+
+    if (cJSON_IsNumber(operation)) {
+        if (operation->valuedouble == 0.0) {
+            *isOperation = false;
+            return true;
+        }
+        if (operation->valuedouble == 1.0) {
+            *isOperation = true;
+            return true;
+        }
+    }
+    return false;
+}
+
 void *GuiGetEthTypeData(void)
 {
     CHECK_FREE_PARSE_RESULT(g_parseResult);
+    g_isOperation = false;
+    g_isPermit = false;
+    g_isPermitSingle = false;
     uint8_t mfp[4];
     void *data = g_isMulti ? g_urMultiResult->data : g_urResult->data;
     char *rootPath = eth_get_root_path(data);
@@ -800,21 +846,45 @@ void *GuiGetEthTypeData(void)
     TransactionCheckResult *result = NULL;
     do {
         result = eth_check(data, mfp, sizeof(mfp));
-        CHECK_CHAIN_BREAK(result);
+        if (result == NULL || result->error_code != 0) {
+            break;
+        }
+
         PtrT_TransactionParseResult_DisplayETHTypedData parseResult = eth_parse_typed_data(data, ethXpub);
+        if (parseResult == NULL) {
+            break;
+        }
+        if (parseResult->error_code != 0) {
+            g_parseResult = (void *)parseResult;
+            break;
+        }
+        if (parseResult->data == NULL || parseResult->data->message == NULL ||
+            parseResult->data->primary_type == NULL) {
+            free_TransactionParseResult_DisplayETHTypedData(parseResult);
+            break;
+        }
+
         cJSON *json = cJSON_Parse(parseResult->data->message);
-        cJSON *operation = cJSON_GetObjectItem(json, "operation");
-        if (operation) {
-            uint32_t operationValue;
-            sscanf(operation->valuestring, "%d", &operationValue);
-            g_isOperation = operationValue == 1;
+        if (json == NULL || !cJSON_IsObject(json)) {
+            cJSON_Delete(json);
+            free_TransactionParseResult_DisplayETHTypedData(parseResult);
+            break;
+        }
+
+        if (strcmp(parseResult->data->primary_type, "SafeTx") == 0 &&
+            !ParseSafeTxOperation(json, &g_isOperation)) {
+            cJSON_Delete(json);
+            free_TransactionParseResult_DisplayETHTypedData(parseResult);
+            break;
         }
         cJSON_Delete(json);
-        CHECK_CHAIN_BREAK(parseResult);
+
         g_parseResult = (void *)parseResult;
         UpdatePermitFlag(parseResult->data->primary_type);
     } while (0);
-    free_TransactionCheckResult(result);
+    if (result != NULL) {
+        free_TransactionCheckResult(result);
+    }
     free_ptr_string(rootPath);
     return g_parseResult;
 }
@@ -1086,39 +1156,22 @@ void *GuiGetEthData(void)
 {
     memset_s(g_fromEthEnsName, sizeof(g_fromEthEnsName), 0, sizeof(g_fromEthEnsName));
     memset_s(g_toEthEnsName, sizeof(g_toEthEnsName), 0, sizeof(g_toEthEnsName));
+    FreeContractData();
     g_contractDataExist = false;
     g_erc20Name = NULL;
     CHECK_FREE_PARSE_RESULT(g_parseResult);
-    uint8_t mfp[4];
     void *data = g_isMulti ? g_urMultiResult->data : g_urResult->data;
 
-    enum ViewType viewType = ViewTypeUnKnown;
-    enum QRCodeType urType = URTypeUnKnown;
-    if (g_isMulti) {
-        urType = g_urMultiResult->ur_type;
-        viewType = g_urMultiResult->t;
-    } else {
-        urType = g_urResult->ur_type;
-    }
     char *rootPath = NULL;
-    if (urType == Bytes) {
-        rootPath = eth_get_root_path_bytes(data);
-    } else {
-        rootPath = eth_get_root_path(data);
-    }
+    rootPath = eth_get_root_path(data);
     char *ethXpub = "";
     ChainType chainType = GetEthPublickeyIndex(rootPath);
     if (chainType != 0xFF) {
         ethXpub = GetCurrentAccountPublicKey(chainType);
     }
-    GetMasterFingerPrint(mfp);
     PtrT_TransactionParseResult_DisplayETH parseResult = NULL;
     do {
-        if (urType == Bytes) {
-            parseResult = eth_parse_bytes_data(data, ethXpub);
-        } else {
-            parseResult = eth_parse(data, ethXpub);
-        }
+        parseResult = eth_parse(data, ethXpub);
         CHECK_CHAIN_BREAK(parseResult);
         g_parseResult = (void *)parseResult;
         if (parseResult->data->overview->from != NULL) {
@@ -1137,31 +1190,310 @@ PtrT_TransactionCheckResult GuiGetEthCheckResult(void)
 {
     uint8_t mfp[4];
     void *data = g_isMulti ? g_urMultiResult->data : g_urResult->data;
-    enum QRCodeType urType = URTypeUnKnown;
-    void *crypto = NULL;
-    if (g_isMulti) {
-        crypto = g_urMultiResult->data;
-        urType = g_urMultiResult->ur_type;
-    } else {
-        crypto = g_urResult->data;
-        urType = g_urResult->ur_type;
-    }
     GetMasterFingerPrint(mfp);
-    // get the urType
-    if (urType == Bytes) {
-        return eth_check_ur_bytes(data, mfp, sizeof(mfp), urType);
-    } else {
-        return eth_check(data, mfp, sizeof(mfp));
-    }
+    return eth_check(data, mfp, sizeof(mfp));
 }
 
-void GetEthTransType(void *indata, void *param, uint32_t maxLen)
+void GuiEthTxOverview(lv_obj_t *parent, void *totalData)
 {
-    DisplayETH *eth = (DisplayETH *)param;
-    strcpy_s((char *)indata, maxLen, eth->tx_type);
+    DisplayETH *eth = (DisplayETH *)totalData;
+    lv_obj_set_size(parent, 408, 444);
+    lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(parent, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *lastView = NULL;
+    if (eth->overview->from == NULL) {
+        lastView = CreateNoticeCard(parent, _("custom_path_parse_notice"));
+    }
+    lastView = CreateEthOverviewValueView(parent, eth, lastView);
+    lastView = CreateEthOverviewNetworkView(parent, eth, lastView);
+    lastView = CreateEthAddressView(parent, eth, lastView, false);
+    lv_obj_update_layout(parent);
 }
 
-void GetEthTxFee(void *indata, void *param, uint32_t maxLen)
+void GuiEthTxDetails(lv_obj_t *parent, void *totalData)
+{
+    DisplayETH *eth = (DisplayETH *)totalData;
+    lv_obj_set_size(parent, 408, 444);
+    lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(parent, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *lastView = NULL;
+    if (eth->overview->from == NULL) {
+        lastView = CreateNoticeCard(parent, _("custom_path_parse_notice"));
+    }
+    lastView = CreateEthDetailsFeeView(parent, eth, lastView);
+    lastView = CreateEthOverviewNetworkView(parent, eth, lastView);
+
+    if (g_contractDataExist) {
+        char method[96] = {0};
+        GetEthMethodName(method, eth, sizeof(method));
+        lastView = CreateTransactionItemView(parent, _("Method"), method, lastView);
+    }
+
+    lastView = CreateTransactionItemView(parent, _("nonce"), eth->detail->nonce, lastView);
+    lastView = CreateEthAddressView(parent, eth, lastView, true);
+    lastView = CreateEthDetailsContractViews(parent, eth, lastView);
+    lv_obj_update_layout(parent);
+}
+
+static lv_obj_t *CreateEthOverviewValueView(lv_obj_t *parent, DisplayETH *eth, lv_obj_t *lastView)
+{
+    bool erc20Transfer = isErc20Transfer(eth);
+    char title[32] = {0};
+    char value[96] = {0};
+    if (erc20Transfer) {
+        strcpy_s(title, sizeof(title), _("Value"));
+        GetErc20TransferValue(eth, value, sizeof(value));
+    } else {
+        GetEthValueTitle(title, eth, sizeof(title));
+        GetEthValue(value, eth, sizeof(value));
+    }
+
+    lv_obj_t *container = CreateRelativeTransactionContentContainer(parent, 408, 144, lastView);
+    lv_obj_t *label = GuiCreateIllustrateLabel(container, title);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 16);
+    lv_obj_set_style_text_opa(label, LV_OPA_64, LV_PART_MAIN);
+
+    label = GuiCreateLittleTitleLabel(container, value);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 50);
+    lv_obj_set_width(label, 360);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_color(label, ORANGE_COLOR, LV_PART_MAIN);
+    lv_obj_update_layout(label);
+
+    uint16_t nextY = 50 + lv_obj_get_height(label) + 18;
+    if (erc20Transfer) {
+        GetEthValue(value, eth, sizeof(value));
+        nextY = CreateEthOverviewValueRow(container, _("Native Transfer"), value, nextY);
+    }
+
+    GetEthTxFee(value, eth, sizeof(value));
+    nextY = CreateEthOverviewValueRow(container, _("MaxTxnFee"), value, nextY);
+    lv_obj_set_height(container, nextY + 8);
+    lv_obj_update_layout(container);
+    return container;
+}
+
+static uint16_t CreateEthOverviewValueRow(lv_obj_t *container, const char *title, const char *value, uint16_t y)
+{
+    lv_obj_t *titleLabel = GuiCreateIllustrateLabel(container, title);
+    lv_obj_align(titleLabel, LV_ALIGN_TOP_LEFT, 24, y);
+    lv_obj_set_style_text_opa(titleLabel, LV_OPA_64, LV_PART_MAIN);
+    lv_obj_update_layout(titleLabel);
+
+    lv_obj_t *valueLabel = GuiCreateIllustrateLabel(container, value);
+    lv_obj_update_layout(valueLabel);
+
+    uint16_t titleWidth = lv_obj_get_width(titleLabel);
+    uint16_t valueWidth = lv_obj_get_width(valueLabel);
+    if (24 + titleWidth + 16 + valueWidth + 24 <= 408) {
+        lv_obj_align_to(valueLabel, titleLabel, LV_ALIGN_OUT_RIGHT_MID, 16, 0);
+        return y + 38;
+    }
+
+    lv_obj_align_to(valueLabel, titleLabel, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_width(valueLabel, 360);
+    lv_label_set_long_mode(valueLabel, LV_LABEL_LONG_WRAP);
+    lv_obj_update_layout(valueLabel);
+    return y + lv_obj_get_height(titleLabel) + lv_obj_get_height(valueLabel) + 8;
+}
+
+static lv_obj_t *CreateEthOverviewNetworkView(lv_obj_t *parent, DisplayETH *eth, lv_obj_t *lastView)
+{
+    char network[64] = {0};
+    GetEthNetWork(network, eth, sizeof(network));
+    return CreateTransactionItemView(parent, _("Network"), network, lastView);
+}
+
+static lv_obj_t *CreateEthAddressView(lv_obj_t *parent, DisplayETH *eth, lv_obj_t *lastView, bool details)
+{
+    uint16_t width = 0;
+    uint16_t height = 0;
+    uint16_t y = 16;
+    char address[128] = {0};
+    GetEthToFromSize(&width, &height, eth);
+
+    lv_obj_t *container = CreateRelativeTransactionContentContainer(parent, width, height, lastView);
+    lv_obj_t *label;
+    if (eth->overview->from != NULL) {
+        label = GuiCreateIllustrateLabel(container, _("From"));
+        lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, y);
+        lv_obj_set_style_text_opa(label, LV_OPA_64, LV_PART_MAIN);
+
+        GetEthGetFromAddress(address, eth, sizeof(address));
+        label = GuiCreateIllustrateLabel(container, address);
+        lv_obj_set_width(label, 360);
+        lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, y + 38);
+
+        y += 114;
+        if (g_fromEnsExist) {
+            lv_obj_t *icon = GuiCreateImg(container, &imgEns);
+            lv_obj_align(icon, LV_ALIGN_TOP_LEFT, 24, y - 1);
+            label = GuiCreateIllustrateLabel(container, g_fromEthEnsName);
+            lv_obj_align(label, LV_ALIGN_TOP_LEFT, 56, y - 4);
+            lv_obj_set_style_text_color(label, lv_color_hex(0x1BE0C6), LV_PART_MAIN);
+            y += GAP + TEXT_LINE_HEIGHT;
+        }
+    }
+
+    label = GuiCreateIllustrateLabel(container, _("To"));
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, y);
+    lv_obj_set_style_text_opa(label, LV_OPA_64, LV_PART_MAIN);
+
+    if (details) {
+        GetEthGetDetailPageToAddress(address, eth, sizeof(address));
+    } else {
+        GetEthGetToAddress(address, eth, sizeof(address));
+    }
+    label = GuiCreateIllustrateLabel(container, address);
+    lv_obj_set_width(label, 360);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, y + 38);
+
+    if (g_toEnsExist) {
+        y += 114;
+        lv_obj_t *icon = GuiCreateImg(container, &imgEns);
+        lv_obj_align(icon, LV_ALIGN_TOP_LEFT, 24, y - 1);
+        label = GuiCreateIllustrateLabel(container, g_toEthEnsName);
+        lv_obj_align(label, LV_ALIGN_TOP_LEFT, 56, y - 4);
+        lv_obj_set_style_text_color(label, lv_color_hex(0x1BE0C6), LV_PART_MAIN);
+        y += GAP + TEXT_LINE_HEIGHT;
+    } else {
+        y += 114;
+    }
+    if (details && g_contractDataExist) {
+        char contractName[96] = {0};
+        GetEthContractName(contractName, eth, sizeof(contractName));
+        lv_obj_t *icon = GuiCreateImg(container, &imgContract);
+        lv_obj_align(icon, LV_ALIGN_TOP_LEFT, 24, y - 1);
+        label = GuiCreateIllustrateLabel(container, contractName);
+        lv_obj_align(label, LV_ALIGN_TOP_LEFT, 62, y - 4);
+        lv_obj_set_style_text_color(label, lv_color_hex(0xA4877F), LV_PART_MAIN);
+    }
+    return container;
+}
+
+static void CreateEthDetailsPair(lv_obj_t *container, const char *title, const char *value, uint16_t y)
+{
+    lv_obj_t *titleLabel = GuiCreateIllustrateLabel(container, title);
+    lv_obj_align(titleLabel, LV_ALIGN_TOP_LEFT, 24, y);
+    lv_obj_set_style_text_opa(titleLabel, LV_OPA_64, LV_PART_MAIN);
+
+    lv_obj_t *valueLabel = GuiCreateIllustrateLabel(container, value);
+    lv_obj_align_to(valueLabel, titleLabel, LV_ALIGN_OUT_RIGHT_MID, 16, 0);
+}
+
+static lv_obj_t *CreateEthDetailsFeeView(lv_obj_t *parent, DisplayETH *eth, lv_obj_t *lastView)
+{
+    bool feeMarket = strcmp(eth->tx_type, "FeeMarket") == 0;
+    bool erc20Transfer = isErc20Transfer(eth);
+    uint16_t offset = erc20Transfer ? 38 : 0;
+    lv_obj_t *container =
+        CreateRelativeTransactionContentContainer(parent, 408, (feeMarket ? 316 : 208) + offset, lastView);
+    char value[96] = {0};
+
+    if (erc20Transfer) {
+        GetErc20TransferValue(eth, value, sizeof(value));
+        CreateEthDetailsPair(container, _("Value"), value, 16);
+        GetEthValue(value, eth, sizeof(value));
+        CreateEthDetailsPair(container, _("Native Transfer"), value, 54);
+    } else {
+        GetEthValue(value, eth, sizeof(value));
+        CreateEthDetailsPair(container,
+                             strlen(eth->detail->input) > 0 ? _("Native Transfer") : _("Value"),
+                             value, 16);
+    }
+
+    if (feeMarket) {
+        GetEthMaxFee(value, eth, sizeof(value));
+        CreateEthDetailsPair(container, _("MaxFee"), value, 54 + offset);
+
+        lv_obj_t *label = GuiCreateIllustrateLabel(container, _("·MaxFeePrice*GasLimit"));
+        lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 92 + offset);
+        lv_obj_set_style_text_opa(label, LV_OPA_64, LV_PART_MAIN);
+
+        GetEthMaxPriority(value, eth, sizeof(value));
+        CreateEthDetailsPair(container, _("MaxPriority"), value, 124 + offset);
+
+        label = GuiCreateIllustrateLabel(container, _("·MaxPriorityFeePrice*GasLimit"));
+        lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 162 + offset);
+        lv_obj_set_style_text_opa(label, LV_OPA_64, LV_PART_MAIN);
+
+        GetEthMaxFeePrice(value, eth, sizeof(value));
+        CreateEthDetailsPair(container, _("MaxFeePrice"), value, 194 + offset);
+        GetEthMaxPriorityFeePrice(value, eth, sizeof(value));
+        CreateEthDetailsPair(container, _("MaxPriorityFeePrice"), value, 232 + offset);
+        CreateEthDetailsPair(container, _("GasLimit"), eth->overview->gas_limit, 270 + offset);
+    } else {
+        GetEthTxFee(value, eth, sizeof(value));
+        CreateEthDetailsPair(container, _("MaxTxnFee"), value, 54 + offset);
+
+        lv_obj_t *label = GuiCreateIllustrateLabel(container, "  \xE2\x80\xA2  Max Txn Fee = Gas Price * Gas Limit");
+        lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 92 + offset);
+        lv_obj_set_style_text_font(label, &openSansDesc, LV_PART_MAIN);
+        lv_obj_set_style_text_opa(label, LV_OPA_64, LV_PART_MAIN);
+
+        CreateEthDetailsPair(container, _("GasPrice"), eth->overview->gas_price, 124 + offset);
+        CreateEthDetailsPair(container, _("GasLimit"), eth->overview->gas_limit, 162 + offset);
+    }
+    return container;
+}
+
+static lv_obj_t *CreateEthDetailsRawDataButton(lv_obj_t *parent, lv_obj_t *lastView)
+{
+    lv_obj_t *button = GuiCreateBtnWithFont(parent, _("Check the Raw Data"), &openSansEnIllustrate);
+    lv_obj_set_size(button, 408, 62);
+    lv_obj_set_style_radius(button, 24, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(button, WHITE_COLOR, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(button, LV_OPA_12, LV_PART_MAIN);
+    lv_obj_set_style_text_color(button, lv_color_hex(0x1BE0C6), LV_PART_MAIN);
+    if (lastView != NULL) {
+        lv_obj_align_to(button, lastView, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
+    }
+    lv_obj_add_event_cb(button, EthContractCheckRawData, LV_EVENT_CLICKED, NULL);
+    return button;
+}
+
+static lv_obj_t *CreateEthDetailsContractViews(lv_obj_t *parent, DisplayETH *eth, lv_obj_t *lastView)
+{
+    if (eth->detail->input == NULL || strlen(eth->detail->input) == 0) {
+        return lastView;
+    }
+
+    if (!g_contractDataExist || g_contractData == NULL) {
+        char input[64] = {0};
+        GetEthTransactionData(input, eth, sizeof(input));
+        lastView = CreateTransactionItemViewWithHint(parent, _("InputData"), input, lastView, _("UnknownContract"));
+
+        lv_obj_t *learnMore = GuiCreateBtnWithFont(parent, _("LearnMore"), &openSansEnIllustrate);
+        lv_obj_set_size(learnMore, 144, 46);
+        lv_obj_set_style_radius(learnMore, 23, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(learnMore, lv_color_hex(0x1D1D1D), LV_PART_MAIN);
+        lv_obj_set_style_text_color(learnMore, lv_color_hex(0x1BE0C6), LV_PART_MAIN);
+        lv_obj_align_to(learnMore, lastView, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 8);
+        lv_obj_add_event_cb(learnMore, EthContractLearnMore, LV_EVENT_CLICKED, NULL);
+        lastView = learnMore;
+    } else {
+        Response_DisplayContractData *contractData = (Response_DisplayContractData *)g_contractData;
+        if (contractData->data != NULL && contractData->data->params != NULL) {
+            // Keep contract parameter rendering bounded. Raw Data is available on demand below.
+            char truncatedValue[BUFFER_SIZE_512 + 1] = {0};
+            for (size_t i = 0; i < contractData->data->params->size; i++) {
+                DisplayContractParam *param = &contractData->data->params->data[i];
+                const char *displayValue = param->value;
+                if (strnlen_s(param->value, BUFFER_SIZE_512 + 1) > BUFFER_SIZE_512) {
+                    memcpy(truncatedValue, param->value, BUFFER_SIZE_512 - 3);
+                    memcpy(&truncatedValue[BUFFER_SIZE_512 - 3], "...", 4);
+                    displayValue = truncatedValue;
+                }
+                lastView = CreateTransactionItemView(parent, param->name, displayValue, lastView);
+            }
+        }
+    }
+    return CreateEthDetailsRawDataButton(parent, lastView);
+}
+
+static void GetEthTxFee(void *indata, void *param, uint32_t maxLen)
 {
     DisplayETH *eth = (DisplayETH *)param;
     if (eth->overview->max_txn_fee != NULL) {
@@ -1197,30 +1529,21 @@ void *FindErc20Contract(char *contract_address)
     return NULL;
 }
 
-void GetEthValue(void *indata, void *param, uint32_t maxLen)
+static void GetEthValue(void *indata, void *param, uint32_t maxLen)
 {
     DisplayETH *eth = (DisplayETH *)param;
-    if (isErc20Transfer(eth)) {
-        TransactionParseResult_EthParsedErc20Transaction *contract = (TransactionParseResult_EthParsedErc20Transaction *)g_erc20ContractData;
-        snprintf_s((char *)indata,  maxLen, "%s %s", contract->data->value, CalcSymbol(param));
-    } else {
-        snprintf_s((char *)indata,  maxLen, "%s %s", eth->overview->value, CalcSymbol(param));
-    }
+    EvmNetwork_t network = FindEvmNetwork(eth->chain_id);
+    snprintf_s((char *)indata, maxLen, "%s %s", eth->overview->value, network.symbol);
 }
 
-void GetEthGasPrice(void *indata, void *param, uint32_t maxLen)
+static void GetEthValueTitle(void *indata, void *param, uint32_t maxLen)
 {
     DisplayETH *eth = (DisplayETH *)param;
-    strcpy_s((char *)indata, maxLen, eth->overview->gas_price);
+    const char *title = strlen(eth->detail->input) > 0 ? _("Native Transfer") : _("Value");
+    strcpy_s((char *)indata, maxLen, title);
 }
 
-void GetEthGasLimit(void *indata, void *param, uint32_t maxLen)
-{
-    DisplayETH *eth = (DisplayETH *)param;
-    strcpy_s((char *)indata, maxLen, eth->overview->gas_limit);
-}
-
-void GetEthNetWork(void *indata, void *param, uint32_t maxLen)
+static void GetEthNetWork(void *indata, void *param, uint32_t maxLen)
 {
     DisplayETH *eth = (DisplayETH *)param;
     EvmNetwork_t network = FindEvmNetwork(eth->chain_id);
@@ -1231,7 +1554,7 @@ void GetEthNetWork(void *indata, void *param, uint32_t maxLen)
     strcpy_s((char *)indata, maxLen, network.name);
 }
 
-void GetEthMaxFee(void *indata, void *param, uint32_t maxLen)
+static void GetEthMaxFee(void *indata, void *param, uint32_t maxLen)
 {
     DisplayETH *eth = (DisplayETH *)param;
     if (eth->detail->max_fee != NULL) {
@@ -1241,7 +1564,7 @@ void GetEthMaxFee(void *indata, void *param, uint32_t maxLen)
     }
 }
 
-void GetEthMaxPriority(void *indata, void *param, uint32_t maxLen)
+static void GetEthMaxPriority(void *indata, void *param, uint32_t maxLen)
 {
     DisplayETH *eth = (DisplayETH *)param;
     if (eth->detail->max_priority != NULL) {
@@ -1251,19 +1574,19 @@ void GetEthMaxPriority(void *indata, void *param, uint32_t maxLen)
     }
 }
 
-void GetEthMaxFeePrice(void *indata, void *param, uint32_t maxLen)
+static void GetEthMaxFeePrice(void *indata, void *param, uint32_t maxLen)
 {
     DisplayETH *eth = (DisplayETH *)param;
     strcpy_s((char *)indata, maxLen, eth->detail->max_fee_price);
 }
 
-void GetEthMaxPriorityFeePrice(void *indata, void *param, uint32_t maxLen)
+static void GetEthMaxPriorityFeePrice(void *indata, void *param, uint32_t maxLen)
 {
     DisplayETH *eth = (DisplayETH *)param;
     strcpy_s((char *)indata, maxLen, eth->detail->max_priority_price);
 }
 
-void GetEthGetFromAddress(void *indata, void *param, uint32_t maxLen)
+static void GetEthGetFromAddress(void *indata, void *param, uint32_t maxLen)
 {
     DisplayETH *eth = (DisplayETH *)param;
     if (eth->overview->from == NULL) {
@@ -1279,7 +1602,7 @@ void GetEthGetSignerAddress(void *indata, void *param, uint32_t maxLen)
     strcpy_s((char *)indata, maxLen, message->from);
 }
 
-void GetEthGetToAddress(void *indata, void *param, uint32_t maxLen)
+static void GetEthGetToAddress(void *indata, void *param, uint32_t maxLen)
 {
     DisplayETH *eth = (DisplayETH *)param;
     if (isErc20Transfer(eth)) {
@@ -1290,7 +1613,7 @@ void GetEthGetToAddress(void *indata, void *param, uint32_t maxLen)
     }
 }
 
-void GetEthGetDetailPageToAddress(void *indata, void *param, uint32_t maxLen)
+static void GetEthGetDetailPageToAddress(void *indata, void *param, uint32_t maxLen)
 {
     DisplayETH *eth = (DisplayETH *)param;
     if (isErc20Transfer(eth)) {
@@ -1300,50 +1623,6 @@ void GetEthGetDetailPageToAddress(void *indata, void *param, uint32_t maxLen)
     }
 }
 
-
-void GetTxnFeeDesc(void *indata, void *param, uint32_t maxLen)
-{
-    strcpy_s((char *)indata, maxLen, "  \xE2\x80\xA2  Max Txn Fee = Gas Price * Gas Limit");
-}
-
-void GetEthEnsName(void *indata, void *param, uint32_t maxLen)
-{
-    strcpy_s((char *)indata, maxLen, g_fromEthEnsName);
-}
-
-void GetToEthEnsName(void *indata, void *param, uint32_t maxLen)
-{
-    strcpy_s((char *)indata, maxLen, g_toEthEnsName);
-}
-
-void GetEthNonce(void *indata, void *param, uint32_t maxLen)
-{
-    DisplayETH *eth = (DisplayETH *)param;
-    strcpy_s((char *)indata, maxLen, eth->detail->nonce);
-}
-
-void GetEthInputData(void *indata, void *param, uint32_t maxLen)
-{
-    DisplayETH *eth = (DisplayETH *)param;
-    snprintf((char *)indata, maxLen, "0x%s", eth->detail->input);
-}
-
-int GetEthInputDataLen(void *param)
-{
-    DisplayETH *eth = (DisplayETH *)param;
-    return strlen(eth->detail->input) + 3;
-}
-
-bool GetEthFromAddressExist(void *indata, void *param)
-{
-    DisplayETH *eth = (DisplayETH *)param;
-    return eth->overview->from != NULL;
-}
-
-bool GetEthFromAddressNotExist(void *indata, void *param)
-{
-    return !GetEthFromAddressExist(indata, param);
-}
 
 bool GetEthMessageFromExist(void *indata, void *param)
 {
@@ -1356,32 +1635,13 @@ bool GetEthMessageFromNotExist(void *indata, void *param)
     return !GetEthMessageFromExist(indata, param);
 }
 
-bool GetEthEnsExist(void *indata, void *param)
-{
-    return g_fromEnsExist;
-}
-
-bool GetToEthEnsExist(void *indata, void *param)
-{
-    return g_toEnsExist;
-}
-
-bool GetEthInputDataExist(void *indata, void *param)
+static void GetEthToFromSize(uint16_t *width, uint16_t *height, void *param)
 {
     DisplayETH *eth = (DisplayETH *)param;
-    return strlen(eth->detail->input) > 0;
-}
-
-bool EthInputExistContractNot(void *indata, void *param)
-{
-    DisplayETH *eth = (DisplayETH *)param;
-    return !g_contractDataExist && strlen(eth->detail->input) > 0;
-}
-
-void GetEthToFromSize(uint16_t *width, uint16_t *height, void *param)
-{
     *width = 408;
-    *height = (244 - 114) + GetEthFromAddressExist(NULL, param) * 114 + (g_fromEnsExist + g_toEnsExist) * (GAP + TEXT_LINE_HEIGHT) + g_contractDataExist * (GAP + TEXT_LINE_HEIGHT);
+    *height = (244 - 114) + (eth->overview->from != NULL) * 114 +
+              (g_fromEnsExist + g_toEnsExist) * (GAP + TEXT_LINE_HEIGHT) +
+              g_contractDataExist * (GAP + TEXT_LINE_HEIGHT);
 }
 
 void GetEthTypeDomainSize(uint16_t *width, uint16_t *height, void *param)
@@ -1390,12 +1650,6 @@ void GetEthTypeDomainSize(uint16_t *width, uint16_t *height, void *param)
     *height = 298 + (98 + 16) * GetEthTypeDataHashExist(NULL, param) +
               GetEthTypeDataChainExist(NULL, param) * 90 +
               GetEthTypeDataVersionExist(NULL, param) * 90;
-}
-
-void GetEthToLabelPos(uint16_t *x, uint16_t *y, void *param)
-{
-    *x = 24;
-    *y = 16 + GetEthFromAddressExist(NULL, param) * 114 + g_fromEnsExist * 38;
 }
 
 void GetEthMessagePos(uint16_t *x, uint16_t *y, void *param)
@@ -1414,17 +1668,7 @@ void GetEthTypeDomainPos(uint16_t *x, uint16_t *y, void *param)
     }
 }
 
-bool GetEthContractDataExist(void *indata, void *param)
-{
-    return g_contractDataExist;
-}
-
-bool GetEthContractDataNotExist(void *indata, void *param)
-{
-    return !g_contractDataExist;
-}
-
-void GetEthTransactionData(void *indata, void *param, uint32_t maxLen)
+static void GetEthTransactionData(void *indata, void *param, uint32_t maxLen)
 {
     DisplayETH *eth = (DisplayETH *)param;
     if (strlen(eth->detail->input) > 51) {
@@ -1437,13 +1681,13 @@ void GetEthTransactionData(void *indata, void *param, uint32_t maxLen)
     }
 }
 
-void GetEthMethodName(void *indata, void *param, uint32_t maxLen)
+static void GetEthMethodName(void *indata, void *param, uint32_t maxLen)
 {
     Response_DisplayContractData *contractData = (Response_DisplayContractData *)g_contractData;
     strcpy_s((char *)indata, maxLen, contractData->data->method_name);
 }
 
-void GetEthContractName(void *indata, void *param, uint32_t maxLen)
+static void GetEthContractName(void *indata, void *param, uint32_t maxLen)
 {
     Response_DisplayContractData *contractData = (Response_DisplayContractData *)g_contractData;
     if (g_erc20Name != NULL && strlen(g_erc20Name) > 0) {
@@ -1458,69 +1702,6 @@ void GetEthContractName(void *indata, void *param, uint32_t maxLen)
     }
 }
 
-void GetEthContractDataSize(uint16_t *width, uint16_t *height, void *param)
-{
-    *width = 408;
-    Response_DisplayContractData *contractData = (Response_DisplayContractData *)g_contractData;
-    *height = PADDING;
-    if (g_contractDataExist) {
-        *height += TEXT_LINE_HEIGHT; // "Method"
-        *height += GAP;
-        *height += TEXT_LINE_HEIGHT; // method name
-        *height += GAP;
-
-        for (size_t i = 0; i < contractData->data->params->size; i++) {
-            *height += TEXT_LINE_HEIGHT; // param name
-            *height += GAP;
-            *height += TEXT_LINE_HEIGHT; // param value
-            *height += GAP;
-        }
-    } else {
-        *height += CONTRACT_MIN_HEIGHT; // input data
-        *height += GAP;
-        *height += CONTRACT_LEARN_MORE_HEIGHT;
-    }
-    *height += PADDING;
-}
-
-void *GetEthContractData(uint8_t *row, uint8_t *col, void *param)
-{
-    Response_DisplayContractData *contractData = (Response_DisplayContractData *)g_contractData;
-    *col = 1;
-    *row = contractData->data->params->size * 2; // name + value
-    int i = 0, j = 0;
-    char ***indata = (char ***)SRAM_MALLOC(sizeof(char **) * *col);
-    for (i = 0; i < *col; i++) {
-        if (*row == 0) {
-            indata[i] = NULL;
-            continue;
-        }
-        indata[i] = SRAM_MALLOC(sizeof(char *) * *row);
-        for (j = 0; j < *row; j++) {
-            int index = j / 2;
-            DisplayContractParam param = contractData->data->params->data[index];
-            if (!(j % 2)) {
-                uint32_t len = strnlen_s(param.name, BUFFER_SIZE_128) + 10;
-                indata[i][j] = SRAM_MALLOC(len);
-                snprintf_s(indata[i][j], len, "#919191 %s#", param.name);
-            } else {
-                // if param.value length > 512, we only show first 512-3 char
-                if (strlen(param.value) > BUFFER_SIZE_512) {
-                    uint32_t len = strlen(param.value) + 1;
-                    char *suffix = "...";
-                    indata[i][j] = SRAM_MALLOC(len);
-                    strncpy(indata[i][j], param.value, 509);
-                    strncat_s(indata[i][j], sizeof(char) * (strlen(param.value) + 1), suffix, 3);
-                } else {
-                    uint32_t len = strnlen_s(param.value, BUFFER_SIZE_512) + 1;
-                    indata[i][j] = SRAM_MALLOC(len);
-                    strcpy_s(indata[i][j], len, param.value);
-                }
-            }
-        }
-    }
-    return (void *)indata;
-}
 
 static void decodeEthContractData(void *parseResult)
 {
@@ -1545,15 +1726,27 @@ static void decodeEthContractData(void *parseResult)
 
 static void FixRecipientAndValueWhenErc20Contract(const char *inputdata, uint8_t decimals)
 {
-    TransactionParseResult_DisplayETH *result = (TransactionParseResult_DisplayETH *)g_parseResult;
-    if (!isErc20Transfer(result->data)) {
+    const size_t erc20TransferCalldataLen = 136;
+    if (inputdata == NULL ||
+        strnlen_s(inputdata, erc20TransferCalldataLen + 1) != erc20TransferCalldataLen ||
+        strncmp(inputdata, "a9059cbb", 8) != 0) {
         return;
     }
+
     if (g_erc20ContractData != NULL) {
         free_TransactionParseResult_EthParsedErc20Transaction(g_erc20ContractData);
         g_erc20ContractData = NULL;
     }
+
     g_erc20ContractData = eth_parse_erc20((PtrString)inputdata, decimals);
+    TransactionParseResult_EthParsedErc20Transaction *contract =
+        (TransactionParseResult_EthParsedErc20Transaction *)g_erc20ContractData;
+    if (contract == NULL || contract->error_code != 0 || contract->data == NULL) {
+        if (contract != NULL) {
+            free_TransactionParseResult_EthParsedErc20Transaction(contract);
+        }
+        g_erc20ContractData = NULL;
+    }
 }
 
 static bool GetEthErc20ContractData(void *parseResult)
@@ -1647,7 +1840,7 @@ bool GetEthContractFromInternal(char *address, char *inputData)
     return false;
 }
 
-void EthContractLearnMore(lv_event_t *e)
+static void EthContractLearnMore(lv_event_t *e)
 {
     GuiQRCodeHintBoxOpen(_("tx_details_eth_decoding_qr_link"), _("tx_details_eth_decoding_qr_title"), _("tx_details_eth_decoding_qr_link"));
 }
@@ -1710,7 +1903,7 @@ lv_obj_t *GuiCreateContractRawDataHintbox(const char *titleText, const char *des
     return cont;
 }
 
-void EthContractCheckRawData(lv_event_t *e)
+static void EthContractCheckRawData(lv_event_t *e)
 {
     GuiNoPendingHintBoxOpen(_("Loading"));
     GuiModelParseTransactionRawData();

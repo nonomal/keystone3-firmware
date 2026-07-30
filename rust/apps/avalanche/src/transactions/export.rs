@@ -1,5 +1,7 @@
 use super::base_tx::BaseTx;
-use super::structs::{AvaxFromToInfo, AvaxMethodInfo, AvaxTxInfo, LengthPrefixedVec};
+use super::structs::{
+    AvaxFromToInfo, AvaxMethodInfo, AvaxTxInfo, LengthPrefixedVec, ParsedSizeAble,
+};
 use crate::constants::*;
 use crate::errors::{AvaxError, Result};
 use crate::transactions::{transferable::TransferableOutput, type_id::TypeId};
@@ -16,6 +18,12 @@ pub struct ExportTx {
     base_tx: BaseTx,
     dest_chain: [u8; BLOCKCHAIN_ID_LEN],
     transfer_out: LengthPrefixedVec<TransferableOutput>,
+}
+
+impl ParsedSizeAble for ExportTx {
+    fn parsed_size(&self) -> usize {
+        self.base_tx.parsed_size() + BLOCKCHAIN_ID_LEN + self.transfer_out.parsed_size()
+    }
 }
 
 impl AvaxTxInfo for ExportTx {
@@ -94,10 +102,20 @@ impl TryFrom<Bytes> for ExportTx {
         let mut dest_chain = [0u8; BLOCKCHAIN_ID_LEN];
         bytes.copy_to_slice(&mut dest_chain);
 
+        let transfer_out = LengthPrefixedVec::<TransferableOutput>::try_from(bytes.clone())?;
+        let network_id = base_tx.tx_header.get_network_id();
+        if !transfer_out
+            .iter()
+            .all(|output| output.asset_id().is_native_avax(network_id))
+        {
+            return Err(AvaxError::InvalidTransaction(
+                "unsupported non-AVAX asset".to_string(),
+            ));
+        }
         Ok(ExportTx {
             base_tx,
             dest_chain,
-            transfer_out: LengthPrefixedVec::<TransferableOutput>::try_from(bytes.clone())?,
+            transfer_out,
         })
     }
 }

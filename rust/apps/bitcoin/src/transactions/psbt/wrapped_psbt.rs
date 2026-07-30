@@ -22,6 +22,7 @@ use bitcoin::psbt::{GetKey, KeyRequest, Psbt};
 use bitcoin::psbt::{Input, Output};
 use bitcoin::secp256k1::{Secp256k1, Signing, XOnlyPublicKey};
 use bitcoin::taproot::TapLeafHash;
+use bitcoin::transaction::{predict_weight, InputWeightPrediction};
 use bitcoin::{secp256k1, NetworkKind};
 use bitcoin::{Network, PrivateKey};
 use bitcoin::{PublicKey, ScriptBuf, TxOut};
@@ -74,6 +75,65 @@ impl GetKey for Keystore {
 }
 
 impl WrappedPsbt {
+    fn input_weight_prediction(
+        &self,
+        input: &Input,
+        index: usize,
+    ) -> Option<InputWeightPrediction> {
+        let prevout = self.get_input_prevout(input, index).ok()?;
+        let script = &prevout.script_pubkey;
+        if script.is_p2pkh() {
+            Some(InputWeightPrediction::P2PKH_COMPRESSED_MAX)
+        } else if script.is_p2wpkh() {
+            Some(InputWeightPrediction::P2WPKH_MAX)
+        } else if script.is_p2sh()
+            && input
+                .redeem_script
+                .as_ref()
+                .is_some_and(|redeem| redeem.is_p2wpkh())
+            && input.witness_script.is_none()
+        {
+            Some(InputWeightPrediction::new(23, [72usize, 33usize]))
+        } else if script.is_p2tr() && input.tap_scripts.is_empty() {
+            Some(if input.sighash_type.is_some() {
+                InputWeightPrediction::P2TR_KEY_NON_DEFAULT_SIGHASH
+            } else {
+                InputWeightPrediction::P2TR_KEY_DEFAULT_SIGHASH
+            })
+        } else {
+            // Multisig/script-path vsize cannot be estimated reliably here. The absolute-fee
+            // warning still applies without guessing their fee rate.
+            None
+        }
+    }
+
+    pub(crate) fn estimated_signed_vbytes(&self) -> Option<u64> {
+        if self
+            .psbt
+            .inputs
+            .iter()
+            .enumerate()
+            .any(|(index, input)| self.input_weight_prediction(input, index).is_none())
+        {
+            return None;
+        }
+        Some(
+            predict_weight(
+                self.psbt
+                    .inputs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, input)| self.input_weight_prediction(input, index)),
+                self.psbt
+                    .unsigned_tx
+                    .output
+                    .iter()
+                    .map(|output| output.script_pubkey.len()),
+            )
+            .to_vbytes_ceil(),
+        )
+    }
+
     pub fn sign(&mut self, seed: &[u8], mfp: Fingerprint) -> Result<Psbt> {
         let k = Keystore {
             mfp,
@@ -172,8 +232,14 @@ impl WrappedPsbt {
             // not my input
             return Ok(false);
         }
-        self.check_my_input_derivation(input, index)?;
-        self.check_my_input_script(input, index)?;
+        if context.multisig_wallet_config.is_some() {
+            self.check_my_multisig_input_key_and_script(input, index, context)?;
+        } else if context.verify_code.is_some() {
+            self.check_legacy_multisig_input_script(input, index)?;
+        } else {
+            self.check_my_input_derivation(input, index)?;
+            self.check_my_input_script(input, index)?;
+        }
         self.check_my_input_signature(input, index, context)?;
         self.check_my_input_value_tampered(input, index)?;
         self.check_my_wallet_type(input, context)?;
@@ -189,6 +255,18 @@ impl WrappedPsbt {
     }
 
     fn check_my_wallet_type(&self, input: &Input, context: &ParseContext) -> Result<()> {
+        if let Some(config) = &context.multisig_wallet_config {
+            if context
+                .verify_code
+                .as_ref()
+                .is_some_and(|verify_code| verify_code != &config.verify_code)
+            {
+                return Err(BitcoinError::WalletTypeError(
+                    "multisig wallet config does not match verify code".to_string(),
+                ));
+            }
+            return Ok(());
+        }
         let input_verify_code = self.get_my_input_verify_code(input);
         match &context.verify_code {
             //single sig
@@ -227,6 +305,233 @@ impl WrappedPsbt {
 
     pub fn check_my_input_derivation(&self, _input: &Input, _index: usize) -> Result<()> {
         Ok(())
+    }
+
+    fn check_my_multisig_input_key_and_script(
+        &self,
+        input: &Input,
+        index: usize,
+        context: &ParseContext,
+    ) -> Result<()> {
+        let config = context
+            .multisig_wallet_config
+            .as_ref()
+            .ok_or(BitcoinError::InvalidInput)?;
+        if self.is_taproot_input(input) {
+            return Err(BitcoinError::InvalidPsbt(
+                "multisig with taproot is not supported".to_string(),
+            ));
+        }
+        if config.xpub_items.len() as u32 != config.total {
+            return Err(BitcoinError::InvalidTransaction(format!(
+                "invalid input #{index}, current multisig wallet configuration is incomplete"
+            )));
+        }
+
+        let mut expected_suffix: Option<DerivationPath> = None;
+        for (cosigner_index, xpub_item) in config.xpub_items.iter().enumerate() {
+            let parent_path_text =
+                config
+                    .get_derivation_by_index(cosigner_index)
+                    .ok_or_else(|| {
+                        BitcoinError::InvalidTransaction(format!(
+                            "invalid input #{index}, missing cosigner derivation"
+                        ))
+                    })?;
+            let parent_path = DerivationPath::from_str(&parent_path_text).map_err(|_| {
+                BitcoinError::InvalidTransaction(format!(
+                    "invalid input #{index}, cannot parse cosigner derivation"
+                ))
+            })?;
+            let xpub = Xpub::from_str(&xpub_item.xpub).map_err(|_| {
+                BitcoinError::InvalidTransaction(format!(
+                    "invalid input #{index}, cannot parse cosigner xpub"
+                ))
+            })?;
+
+            for (claimed_key, (fingerprint, path)) in input.bip32_derivation.iter() {
+                if !xpub_item.xfp.eq_ignore_ascii_case(&fingerprint.to_string()) {
+                    continue;
+                }
+                let Some(suffix) = Self::derivation_suffix(&parent_path, path) else {
+                    continue;
+                };
+                let derived_key = derive_public_key_by_path(&xpub, &parent_path, path)?;
+                if &derived_key != claimed_key {
+                    continue;
+                }
+                if let Some(expected) = &expected_suffix {
+                    if expected != &suffix {
+                        return Err(BitcoinError::InvalidTransaction(format!(
+                            "invalid input #{index}, cosigner derivation suffixes do not match"
+                        )));
+                    }
+                }
+                expected_suffix = Some(suffix);
+            }
+        }
+
+        let suffix = expected_suffix.ok_or_else(|| {
+            BitcoinError::InvalidTransaction(format!(
+                "invalid input #{index}, no derivation matches current multisig wallet"
+            ))
+        })?;
+        let mut derived_keys = Vec::with_capacity(config.total as usize);
+        for (cosigner_index, xpub_item) in config.xpub_items.iter().enumerate() {
+            let parent_path_text =
+                config
+                    .get_derivation_by_index(cosigner_index)
+                    .ok_or_else(|| {
+                        BitcoinError::InvalidTransaction(format!(
+                            "invalid input #{index}, missing cosigner derivation"
+                        ))
+                    })?;
+            let parent_path = DerivationPath::from_str(&parent_path_text).map_err(|_| {
+                BitcoinError::InvalidTransaction(format!(
+                    "invalid input #{index}, cannot parse cosigner derivation"
+                ))
+            })?;
+            let xpub = Xpub::from_str(&xpub_item.xpub).map_err(|_| {
+                BitcoinError::InvalidTransaction(format!(
+                    "invalid input #{index}, cannot parse cosigner xpub"
+                ))
+            })?;
+            let child_path = parent_path.extend(suffix.as_ref());
+            let key = derive_public_key_by_path(&xpub, &parent_path, &child_path)?;
+            derived_keys.push(bitcoin::PublicKey::new(key));
+        }
+
+        derived_keys.sort();
+        let mut builder = bitcoin::script::Builder::new().push_int(config.threshold as i64);
+        for key in derived_keys.iter() {
+            builder = builder.push_key(key);
+        }
+        let multisig_script = builder
+            .push_int(config.total as i64)
+            .push_opcode(bitcoin::opcodes::all::OP_CHECKMULTISIG)
+            .into_script();
+
+        let format = MultiSigFormat::from(&config.format)?;
+        let expected_script_pubkey = match format {
+            MultiSigFormat::P2sh => {
+                if input.redeem_script.as_ref() != Some(&multisig_script)
+                    || input.witness_script.is_some()
+                {
+                    return Err(BitcoinError::InvalidTransaction(format!(
+                        "invalid input #{index}, P2SH redeem script does not match current wallet"
+                    )));
+                }
+                ScriptBuf::new_p2sh(&multisig_script.script_hash())
+            }
+            MultiSigFormat::P2wsh => {
+                if input.witness_script.as_ref() != Some(&multisig_script)
+                    || input.redeem_script.is_some()
+                {
+                    return Err(BitcoinError::InvalidTransaction(format!(
+                        "invalid input #{index}, P2WSH witness script does not match current wallet"
+                    )));
+                }
+                ScriptBuf::new_p2wsh(&multisig_script.wscript_hash())
+            }
+            MultiSigFormat::P2wshP2sh => {
+                let expected_redeem_script = ScriptBuf::new_p2wsh(&multisig_script.wscript_hash());
+                if input.witness_script.as_ref() != Some(&multisig_script)
+                    || input.redeem_script.as_ref() != Some(&expected_redeem_script)
+                {
+                    return Err(BitcoinError::InvalidTransaction(format!(
+                        "invalid input #{index}, nested multisig scripts do not match current wallet"
+                    )));
+                }
+                ScriptBuf::new_p2sh(&expected_redeem_script.script_hash())
+            }
+        };
+
+        if self.get_input_prevout(input, index)?.script_pubkey != expected_script_pubkey {
+            return Err(BitcoinError::InvalidTransaction(format!(
+                "invalid input #{index}, previous output does not belong to current multisig wallet"
+            )));
+        }
+        Ok(())
+    }
+
+    fn check_legacy_multisig_input_script(&self, input: &Input, index: usize) -> Result<()> {
+        let (multisig_script, format) = self.get_multi_sig_script_and_format(input)?;
+        if !multisig_script.is_multisig() {
+            return Err(BitcoinError::InvalidTransaction(format!(
+                "invalid input #{index}, legacy multisig script is not multisig"
+            )));
+        }
+        let expected_script_pubkey = match format {
+            MultiSigFormat::P2sh => ScriptBuf::new_p2sh(&multisig_script.script_hash()),
+            MultiSigFormat::P2wsh => ScriptBuf::new_p2wsh(&multisig_script.wscript_hash()),
+            MultiSigFormat::P2wshP2sh => {
+                let expected_redeem_script = ScriptBuf::new_p2wsh(&multisig_script.wscript_hash());
+                if input.redeem_script.as_ref() != Some(&expected_redeem_script) {
+                    return Err(BitcoinError::InvalidTransaction(format!(
+                        "invalid input #{index}, nested multisig redeem script is inconsistent"
+                    )));
+                }
+                ScriptBuf::new_p2sh(&expected_redeem_script.script_hash())
+            }
+        };
+        if self.get_input_prevout(input, index)?.script_pubkey != expected_script_pubkey {
+            return Err(BitcoinError::InvalidTransaction(format!(
+                "invalid input #{index}, multisig script does not match previous output"
+            )));
+        }
+        Ok(())
+    }
+
+    fn derivation_suffix(
+        parent_path: &DerivationPath,
+        child_path: &DerivationPath,
+    ) -> Option<DerivationPath> {
+        if !child_path.as_ref().starts_with(parent_path.as_ref()) {
+            return None;
+        }
+        Some(DerivationPath::from(
+            &child_path.as_ref()[parent_path.len()..],
+        ))
+    }
+
+    fn get_input_prevout<'a>(&'a self, input: &'a Input, index: usize) -> Result<&'a TxOut> {
+        let tx_in = self
+            .psbt
+            .unsigned_tx
+            .input
+            .get(index)
+            .ok_or(BitcoinError::InvalidInput)?;
+        let non_witness_prevout = if let Some(prev_tx) = &input.non_witness_utxo {
+            if tx_in.previous_output.txid != prev_tx.compute_txid() {
+                return Err(BitcoinError::InvalidTransaction(format!(
+                    "invalid input #{index}, non-witness UTXO txid does not match prevout"
+                )));
+            }
+            Some(
+                prev_tx
+                    .output
+                    .get(tx_in.previous_output.vout as usize)
+                    .ok_or(BitcoinError::InvalidInput)?,
+            )
+        } else {
+            None
+        };
+
+        if let Some(witness_prevout) = &input.witness_utxo {
+            if let Some(prevout) = non_witness_prevout {
+                if prevout != witness_prevout {
+                    return Err(BitcoinError::InputValueTampered(format!(
+                        "input #{index}'s witness and non-witness UTXO do not match"
+                    )));
+                }
+            }
+            return Ok(witness_prevout);
+        }
+        non_witness_prevout.ok_or_else(|| {
+            BitcoinError::InvalidTransaction(format!(
+                "invalid input #{index}, missing previous output"
+            ))
+        })
     }
 
     pub fn check_my_input_signature(
@@ -1091,6 +1396,9 @@ mod tests {
     use either::Left;
     use hex::{self, FromHex, ToHex};
 
+    use crate::multi_sig::wallet::{MultiSigWalletConfig, MultiSigXPubItem};
+    use crate::multi_sig::Network as MultiSigNetwork;
+
     use super::*;
 
     fn empty_psbt() -> Psbt {
@@ -1269,6 +1577,117 @@ mod tests {
             }));
             assert!(reust.is_err());
         }
+    }
+
+    #[test]
+    fn test_multisig_wallet_config_validates_input_script() {
+        let psbt_hex = "70736274ff01005e0200000001d8d89245a905abe9e2ab7bb834ebbc50a75947c82f96eeec7b38e0b399a62c490000000000fdffffff0158070000000000002200202b9710701f5c944606bb6bab82d2ef969677d8b9d04174f59e2a631812ae739bf76c27004f01043587cf0473f7e9418000000147f2d1b4bef083e346eb1949bcd8e2b59f95d8391a9eb4e1ea9005df926585480365fd7b1eca553df2c4e17bc5b88384ceda3d0d98fa3145cff5e61e471671a0b214c45358fa300000800100008000000080010000804f01043587cf04bac1483980000001a73adbe2878487634dcbfc3f7ebde8b1fc994f1ec06860cf01c3fe2ea791ddb602e62a2a9973ee6b3a7af47c229a5bde70bca59bd04bbb297f5693d7aa256b976d1473c5da0a3000008001000080000000800100008000010120110800000000000017a914980ec372495334ee232575505208c0b2e142dbb5872202032ed737f53936afb128247fc71a0b0b5be4d9348e9a48bfda9ef31efe3e45fa2e47304402203109d97095c61395881d6f75093943b16a91e1a4fff73bf193fcfe6e7689a35c02203bd187fed5bba45ee2c322911b8abb07f1d091520f5598259047d0dee058a75e01010304010000000104220020ffac81e598dd9856d08bd6c55b712fd23ea8522bd075fcf48ed467ced2ee015601054752210267ea4562439356307e786faf40503730d8d95a203a0e345cb355a5dfa03fce0321032ed737f53936afb128247fc71a0b0b5be4d9348e9a48bfda9ef31efe3e45fa2e52ae2206032ed737f53936afb128247fc71a0b0b5be4d9348e9a48bfda9ef31efe3e45fa2e1cc45358fa30000080010000800000008001000080000000000000000022060267ea4562439356307e786faf40503730d8d95a203a0e345cb355a5dfa03fce031c73c5da0a3000008001000080000000800100008000000000000000000000";
+        let psbt = Psbt::deserialize(&Vec::from_hex(psbt_hex).unwrap()).unwrap();
+        let mut derivations = Vec::new();
+        let mut xpub_items = Vec::new();
+        for (xpub, (fingerprint, path)) in psbt.xpub.iter() {
+            derivations.push(path.to_string());
+            xpub_items.push(MultiSigXPubItem {
+                xfp: fingerprint.to_string(),
+                xpub: xpub.to_string(),
+            });
+        }
+        let config = MultiSigWalletConfig {
+            creator: "test".to_string(),
+            name: "test".to_string(),
+            threshold: 2,
+            total: 2,
+            derivations,
+            format: "P2WSH-P2SH".to_string(),
+            xpub_items,
+            verify_code: "test".to_string(),
+            verify_without_mfp: String::new(),
+            config_text: String::new(),
+            network: MultiSigNetwork::TestNet,
+        };
+        let mut context = ParseContext {
+            master_fingerprint: Fingerprint::from_str("73c5da0a").unwrap(),
+            extended_public_keys: BTreeMap::new(),
+            verify_code: Some("test".to_string()),
+            multisig_wallet_config: Some(config),
+        };
+        let wrapper = WrappedPsbt { psbt };
+        let input = wrapper.psbt.inputs[0].clone();
+        assert!(wrapper.check_my_wallet_type(&input, &context).is_ok());
+        context.verify_code = Some("wrong".to_string());
+        assert!(wrapper.check_my_wallet_type(&input, &context).is_err());
+        context.verify_code = Some("test".to_string());
+        assert!(wrapper
+            .check_my_multisig_input_key_and_script(&input, 0, &context)
+            .is_ok());
+
+        let multisig_script = input.witness_script.clone().unwrap();
+        context.multisig_wallet_config.as_mut().unwrap().format = "P2WSH".to_string();
+        let mut native_input = input.clone();
+        native_input.redeem_script = None;
+        native_input.witness_utxo.as_mut().unwrap().script_pubkey =
+            ScriptBuf::new_p2wsh(&multisig_script.wscript_hash());
+        assert!(wrapper
+            .check_my_multisig_input_key_and_script(&native_input, 0, &context)
+            .is_ok());
+
+        context.multisig_wallet_config.as_mut().unwrap().format = "P2SH".to_string();
+        let mut legacy_input = input.clone();
+        legacy_input.redeem_script = Some(multisig_script.clone());
+        legacy_input.witness_script = None;
+        legacy_input.witness_utxo.as_mut().unwrap().script_pubkey =
+            ScriptBuf::new_p2sh(&multisig_script.script_hash());
+        assert!(wrapper
+            .check_my_multisig_input_key_and_script(&legacy_input, 0, &context)
+            .is_ok());
+        assert!(wrapper
+            .check_legacy_multisig_input_script(&native_input, 0)
+            .is_ok());
+        assert!(wrapper
+            .check_legacy_multisig_input_script(&legacy_input, 0)
+            .is_ok());
+        assert!(wrapper
+            .check_legacy_multisig_input_script(&input, 0)
+            .is_ok());
+
+        let mut standard_input = input.clone();
+        for script in [
+            "76a914111111111111111111111111111111111111111188ac",
+            "00142222222222222222222222222222222222222222",
+            "51203333333333333333333333333333333333333333333333333333333333333333",
+        ] {
+            standard_input.witness_utxo.as_mut().unwrap().script_pubkey =
+                ScriptBuf::from_hex(script).unwrap();
+            assert!(wrapper
+                .input_weight_prediction(&standard_input, 0)
+                .is_some());
+        }
+
+        context.multisig_wallet_config.as_mut().unwrap().total = 3;
+        assert!(wrapper
+            .check_my_multisig_input_key_and_script(&legacy_input, 0, &context)
+            .is_err());
+        context.multisig_wallet_config.as_mut().unwrap().total = 2;
+
+        let saved_xpub = context.multisig_wallet_config.as_ref().unwrap().xpub_items[0]
+            .xpub
+            .clone();
+        context.multisig_wallet_config.as_mut().unwrap().xpub_items[0].xpub = "invalid".to_string();
+        assert!(wrapper
+            .check_my_multisig_input_key_and_script(&legacy_input, 0, &context)
+            .is_err());
+        context.multisig_wallet_config.as_mut().unwrap().xpub_items[0].xpub = saved_xpub;
+
+        let mut missing_prevout = legacy_input.clone();
+        missing_prevout.witness_utxo = None;
+        assert!(wrapper.get_input_prevout(&missing_prevout, 0).is_err());
+        assert!(wrapper.get_input_prevout(&legacy_input, 1).is_err());
+
+        let mut tampered_input = input;
+        tampered_input.witness_script = Some(ScriptBuf::new());
+        assert!(wrapper
+            .check_my_multisig_input_key_and_script(&tampered_input, 0, &context)
+            .is_err());
     }
 
     #[test]

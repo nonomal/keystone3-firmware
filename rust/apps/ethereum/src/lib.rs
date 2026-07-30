@@ -230,7 +230,7 @@ mod tests {
 
         let result = parse_legacy_tx(&sign_data, Some(pubkey)).unwrap();
 
-        assert_eq!(33, result.nonce);
+        assert_eq!("33", result.nonce);
         assert_eq!(1, result.chain_id);
         assert_eq!(
             "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
@@ -253,7 +253,7 @@ mod tests {
         let seed = hex::decode("5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4").unwrap();
         let pubkey = get_public_key_by_seed(&seed, &path).unwrap();
         let result = parse_fee_market_tx(&sign_data, Some(pubkey)).unwrap();
-        assert_eq!(31, result.nonce);
+        assert_eq!("31", result.nonce);
         assert_eq!(1, result.chain_id);
         assert_eq!(
             "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
@@ -287,6 +287,13 @@ mod tests {
             "0x00000000006c3852cbef3e08e8df289169ede581",
             &result.verifying_contract
         );
+    }
+
+    #[test]
+    fn test_parse_typed_data_rejects_unhashable_message() {
+        let sign_data =
+            br#"{"types":{"EIP712Domain":[]},"primaryType":"Missing","domain":{},"message":{}}"#;
+        assert!(parse_typed_data_message(sign_data, None).is_err());
     }
 
     #[test]

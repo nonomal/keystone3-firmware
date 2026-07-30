@@ -328,18 +328,23 @@ pub struct TypedData {
     pub message: BTreeMap<String, serde_json::Value>,
 }
 
-impl Into<StructTypedDta> for TypedData {
-    fn into(self) -> StructTypedDta {
-        let domain_separator = self.domain.separator(Some(&self.types));
-        let message_hash = self.struct_hash().unwrap();
-        StructTypedDta {
-            name: self.domain.name.unwrap_or_default(),
-            version: self.domain.version.unwrap_or_default(),
-            chain_id: self
+impl TryFrom<TypedData> for StructTypedDta {
+    type Error = Eip712Error;
+
+    fn try_from(value: TypedData) -> Result<Self, Self::Error> {
+        let message_hash = value.struct_hash()?;
+        let message = serde_json::to_string_pretty(&value.message)
+            .map_err(|e| Eip712Error::Message(e.to_string()))?;
+        let domain_separator = value.domain.separator(Some(&value.types));
+
+        Ok(StructTypedDta {
+            name: value.domain.name.unwrap_or_default(),
+            version: value.domain.version.unwrap_or_default(),
+            chain_id: value
                 .domain
                 .chain_id
                 .map_or("".to_string(), |v| v.to_string()),
-            verifying_contract: self.domain.verifying_contract.map_or("".to_string(), |v| {
+            verifying_contract: value.domain.verifying_contract.map_or("".to_string(), |v| {
                 match Address::from_str(&v) {
                     Ok(address) => {
                         let mut s = String::from("0x");
@@ -349,17 +354,18 @@ impl Into<StructTypedDta> for TypedData {
                     Err(_) => v,
                 }
             }),
-            salt: self.domain.salt.map_or("".to_string(), |v| {
+            salt: value.domain.salt.map_or("".to_string(), |v| {
                 let mut s = String::from("0x");
                 s.push_str(&hex::encode(v));
                 s
             }),
-            primary_type: self.primary_type,
-            message: serde_json::to_string_pretty(&self.message).unwrap_or("".to_string()),
+            primary_type: value.primary_type,
+            message,
             from: None,
             message_hash: hex::encode(&message_hash),
             domain_separator: hex::encode(&domain_separator),
-        }
+            safe_tx_hash: String::new(),
+        })
     }
 }
 

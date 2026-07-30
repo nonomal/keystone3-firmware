@@ -253,7 +253,7 @@ impl From<ParsedEthereumTransaction> for DisplayETHDetail {
             gas_limit: convert_c_char(tx.gas_limit),
             from: tx.from.map(convert_c_char).unwrap_or(null_mut()),
             to: convert_c_char(tx.to),
-            nonce: convert_c_char(tx.nonce.to_string()),
+            nonce: convert_c_char(tx.nonce),
             input: convert_c_char(tx.input),
         }
     }
@@ -315,8 +315,6 @@ impl From<TypedData> for DisplayETHTypedData {
             }
         }
 
-        let safe_tx_hash = message.get_safe_tx_hash();
-
         Self {
             name: to_ptr_string(message.name),
             version: to_ptr_string(message.version),
@@ -328,7 +326,7 @@ impl From<TypedData> for DisplayETHTypedData {
             from: message.from.map(to_ptr_string).unwrap_or(null_mut()),
             domain_hash: to_ptr_string(message.domain_separator),
             message_hash: to_ptr_string(message.message_hash),
-            safe_tx_hash: to_ptr_string(safe_tx_hash),
+            safe_tx_hash: to_ptr_string(message.safe_tx_hash),
         }
     }
 }

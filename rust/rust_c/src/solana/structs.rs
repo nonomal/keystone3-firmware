@@ -26,12 +26,35 @@ pub struct DisplaySolanaTx {
 pub struct DisplaySolanaTxOverviewGeneral {
     pub program: PtrString,
     pub method: PtrString,
+    pub value: PtrString,
+    pub from: PtrString,
+    pub to: PtrString,
+    pub amount: PtrString,
+    pub source: PtrString,
+    pub destination: PtrString,
+    pub authority: PtrString,
+    pub token: PtrString,
+    pub mint: PtrString,
+    pub unusual_decimals: bool,
+    pub decimals: u8,
+    pub to_in_lookup_table: bool,
+    pub to_lookup_table_reference: PtrString,
 }
 
 impl Free for DisplaySolanaTxOverviewGeneral {
     unsafe fn free(&self) {
         free_str_ptr!(self.program);
         free_str_ptr!(self.method);
+        free_str_ptr!(self.value);
+        free_str_ptr!(self.from);
+        free_str_ptr!(self.to);
+        free_str_ptr!(self.amount);
+        free_str_ptr!(self.source);
+        free_str_ptr!(self.destination);
+        free_str_ptr!(self.authority);
+        free_str_ptr!(self.token);
+        free_str_ptr!(self.mint);
+        free_str_ptr!(self.to_lookup_table_reference);
     }
 }
 
@@ -40,6 +63,19 @@ impl From<&ProgramOverviewGeneral> for DisplaySolanaTxOverviewGeneral {
         Self {
             program: convert_c_char(value.program.to_string()),
             method: convert_c_char(value.method.to_string()),
+            value: convert_c_char(value.value.to_string()),
+            from: convert_c_char(value.from.to_string()),
+            to: convert_c_char(value.to.to_string()),
+            amount: convert_c_char(value.amount.to_string()),
+            source: convert_c_char(value.source.to_string()),
+            destination: convert_c_char(value.destination.to_string()),
+            authority: convert_c_char(value.authority.to_string()),
+            token: convert_c_char(value.token.to_string()),
+            mint: convert_c_char(value.mint.to_string()),
+            unusual_decimals: value.unusual_decimals,
+            decimals: value.decimals,
+            to_in_lookup_table: value.to_in_lookup_table,
+            to_lookup_table_reference: convert_c_char(value.to_lookup_table_reference.to_string()),
         }
     }
 }
@@ -109,6 +145,7 @@ pub struct DisplaySolanaTxSplTokenTransferOverview {
     pub token_mint_account: PtrString,
     pub token_symbol: PtrString,
     pub token_name: PtrString,
+    pub unusual_decimals: bool,
 }
 impl_c_ptrs!(DisplaySolanaTxSplTokenTransferOverview);
 impl Free for DisplaySolanaTxSplTokenTransferOverview {
@@ -183,6 +220,8 @@ pub struct DisplaySolanaTxOverview {
     pub transfer_value: PtrString,
     pub transfer_from: PtrString,
     pub transfer_to: PtrString,
+    pub transfer_to_in_lookup_table: bool,
+    pub transfer_to_lookup_table_reference: PtrString,
     // vote
     pub votes_on: PtrT<VecFFI<DisplaySolanaTxOverviewVotesOn>>,
     pub vote_account: PtrString,
@@ -278,6 +317,8 @@ impl Default for DisplaySolanaTxOverview {
             main_action: null_mut(),
             transfer_from: null_mut(),
             transfer_to: null_mut(),
+            transfer_to_in_lookup_table: false,
+            transfer_to_lookup_table_reference: null_mut(),
             votes_on: null_mut(),
             vote_account: null_mut(),
             general: null_mut(),
@@ -305,6 +346,7 @@ impl Free for DisplaySolanaTxOverview {
         free_str_ptr!(self.transfer_value);
         free_str_ptr!(self.transfer_from);
         free_str_ptr!(self.transfer_to);
+        free_str_ptr!(self.transfer_to_lookup_table_reference);
         free_str_ptr!(self.vote_account);
         if !self.general.is_null() {
             let x = Box::from_raw(self.general);
@@ -367,6 +409,10 @@ impl From<&ParsedSolanaTx> for DisplaySolanaTxOverview {
                         main_action: convert_c_char(overview.main_action.to_string()),
                         transfer_from: convert_c_char(overview.from.to_string()),
                         transfer_to: convert_c_char(overview.to.to_string()),
+                        transfer_to_in_lookup_table: overview.to_in_lookup_table,
+                        transfer_to_lookup_table_reference: convert_c_char(
+                            overview.to_lookup_table_reference.to_string(),
+                        ),
                         ..DisplaySolanaTxOverview::default()
                     };
                 }
@@ -386,6 +432,7 @@ impl From<&ParsedSolanaTx> for DisplaySolanaTxOverview {
                             ),
                             token_symbol: convert_c_char(overview.token_symbol.to_string()),
                             token_name: convert_c_char(overview.token_name.to_string()),
+                            unusual_decimals: overview.unusual_decimals,
                         }
                         .c_ptr(),
                         ..DisplaySolanaTxOverview::default()

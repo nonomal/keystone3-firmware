@@ -7,6 +7,7 @@ pub use crate::transaction::overview::OverviewDelegate as DetailDelegate;
 pub use crate::transaction::overview::OverviewMessage as DetailMessage;
 pub use crate::transaction::overview::OverviewSend as DetailSend;
 pub use crate::transaction::overview::OverviewUndelegate as DetailUndelegate;
+pub use crate::transaction::overview::OverviewUnknown as DetailUnknownMessage;
 pub use crate::transaction::overview::OverviewVote as DetailVote;
 pub use crate::transaction::overview::OverviewWithdrawReward as DetailWithdrawReward;
 use crate::transaction::structs::FeeDetail;
@@ -90,6 +91,7 @@ pub enum MsgDetail {
     Transfer(DetailTransfer),
     Vote(DetailVote),
     Message(DetailMessage),
+    Unknown(DetailUnknownMessage),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -98,6 +100,8 @@ pub struct CommonDetail {
     pub network: String,
     #[serde(rename(serialize = "Chain ID"))]
     pub chain_id: String,
+    #[serde(skip_serializing_if = "Option::is_none", rename(serialize = "Memo"))]
+    pub memo: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(flatten)]
     pub fee: Option<FeeDetail>,
@@ -109,6 +113,8 @@ pub struct DetailUnknown {
     pub network: String,
     #[serde(rename(serialize = "Chain ID"))]
     pub chain_id: String,
+    #[serde(skip_serializing_if = "Option::is_none", rename(serialize = "Memo"))]
+    pub memo: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(flatten)]
     pub fee: Option<FeeDetail>,
@@ -121,6 +127,7 @@ impl CommonDetail {
         DetailUnknown {
             network: self.network.clone(),
             chain_id: self.chain_id.clone(),
+            memo: self.memo.clone(),
             fee: self.fee.clone(),
             message: "Unknown Data".to_string(),
         }
@@ -138,7 +145,7 @@ impl CosmosTxDetail {
         let msg_arr = msgs
             .as_array()
             .ok_or(CosmosError::ParseTxError("empty msg".to_string()))?;
-        for each in msg_arr {
+        for (index, each) in msg_arr.iter().enumerate() {
             match crate::transaction::utils::detect_msg_type(each["type"].as_str()) {
                 "MsgSend" => {
                     let msg = from_value::<MsgSend>(each["value"].clone())?;
@@ -174,7 +181,9 @@ impl CosmosTxDetail {
                     let msg = from_value::<MsgSignData>(each["value"].clone())?;
                     kind.push(MsgDetail::Message(msg.try_into()?));
                 }
-                _ => {}
+                _ => kind.push(MsgDetail::Unknown(DetailUnknownMessage::from_value(
+                    each, index,
+                )?)),
             };
         }
         Ok(kind)

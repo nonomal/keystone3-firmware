@@ -7,6 +7,8 @@
 #include "gui_chain_components.h"
 #include "keystore.h"
 
+#define AVAX_COMPONENT_WIDTH 376
+
 #define CHECK_FREE_PARSE_RESULT(result)                                     \
     if (result != NULL)                                                     \
     {                                                                       \
@@ -81,147 +83,156 @@ typedef struct {
     bool isChange;
 } DisplayUtxoFromTo;
 
-lv_obj_t *CreateTxOverviewFromTo(lv_obj_t *parent, void *from, int fromLen, void *to, int toLen)
+static void GuiAvaxPrepareComponentParent(lv_obj_t *parent)
 {
-    int height = 16 + 30 + 8 + (60 + 8) * fromLen - 8 + 16 + 30 + 8 + (60 + 8) * toLen + 16;
-    lv_obj_t *container = CreateContentContainer(parent, 408, height);
-
-    DisplayUtxoFromTo *ptr = (DisplayUtxoFromTo *)from;
-    lv_obj_t *label = GuiCreateNoticeLabel(container, _("From"));
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 16);
-    for (int i = 0; i < fromLen; i++) {
-        lv_obj_t *label = GuiCreateIllustrateLabel(container, ptr[i].address);
-        lv_obj_set_width(label, 360);
-        lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 54 + 65 * i);
-    }
-
-    ptr = (DisplayUtxoFromTo *)to;
-    uint16_t offset = 30 + 8 + (60 + 8) * fromLen + 16;
-    label = GuiCreateNoticeLabel(container, _("To"));
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, offset);
-    for (int i = 0; i < toLen; i++) {
-        lv_obj_t *label = GuiCreateIllustrateLabel(container, ptr[i].address);
-        lv_obj_set_width(label, 360);
-        lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 38 + offset + 68 * i);
-    }
-
-    return container;
+    lv_obj_set_size(parent, AVAX_COMPONENT_WIDTH, 444);
+    lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(parent, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLL_ELASTIC);
 }
 
-lv_obj_t *CreateTxDetailsFromTo(lv_obj_t *parent, char *tag, void *fromTo, int len)
+static lv_obj_t *GuiAvaxAppendAddresses(
+    lv_obj_t *parent,
+    lv_obj_t *lastView,
+    const char *tag,
+    void *fromTo,
+    int len,
+    bool showDetails)
 {
-    int height = 16 + 30 + 8 + (94 + 8) * len - 8 + 16;
-    lv_obj_t *container = CreateContentContainer(parent, 408, height);
-
     DisplayUtxoFromTo *ptr = (DisplayUtxoFromTo *)fromTo;
-    lv_obj_t *label = GuiCreateNoticeLabel(container, tag);
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 16);
     for (int i = 0; i < len; i++) {
-        lv_obj_t *label = GuiCreateIllustrateLabel(container, "");
-        lv_label_set_recolor(label, true);
-        lv_label_set_text_fmt(label, "%d    #F5870A %s#", i, ptr[i].amount);
-        GuiAlignToPrevObj(label, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 8);
-
-        if (ptr[i].isChange && !strcmp(tag, "To")) {
-            lv_obj_t *btn = GuiCreateBtnWithFont(container,  _("Change"), &openSansEnIllustrate);
-            lv_obj_set_size(btn, 87, 30);
-            lv_obj_clear_flag(btn, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_set_style_bg_opa(btn, LV_OPA_20, LV_PART_MAIN);
-            lv_obj_set_style_bg_color(btn, WHITE_COLOR, LV_PART_MAIN);
-            lv_obj_set_style_radius(btn, 16, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_align_to(btn, label, LV_ALIGN_OUT_RIGHT_MID, 16, 0);
-        }
-
-        label = GuiCreateIllustrateLabel(container, ptr[i].address);
-        if (ptr[i].isChange && !strcmp(tag, "To")) {
-            lv_obj_align_to(label, lv_obj_get_child(container, lv_obj_get_child_cnt(container) - 3), LV_ALIGN_OUT_BOTTOM_LEFT, 0, 4);
+        char title[BUFFER_SIZE_64] = {0};
+        if (len > 1) {
+            snprintf_s(title, sizeof(title), "%s #%d%s", tag, i + 1,
+                       ptr[i].isChange && !strcmp(tag, "To") ? " (Change)" : "");
         } else {
-            GuiAlignToPrevObj(label, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 4);
+            snprintf_s(title, sizeof(title), "%s%s", tag,
+                       ptr[i].isChange && !strcmp(tag, "To") ? " (Change)" : "");
         }
-        lv_obj_set_width(label, 360);
 
-        if (ptr[i].path != NULL && strlen(ptr[i].path) > 0) {
-            label = GuiCreateNoticeLabel(container, ptr[i].path);
-            GuiAlignToPrevObj(label, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 4);
-            lv_obj_set_width(label, 360);
-            height += 34;
+        if (showDetails) {
+            lastView = CreateTransactionItemViewWithHintAndWidth(
+                parent,
+                title,
+                ptr[i].address,
+                lastView,
+                ptr[i].amount,
+                AVAX_COMPONENT_WIDTH);
+        } else {
+            lastView = CreateTransactionItemViewWithWidth(
+                parent,
+                title,
+                ptr[i].address,
+                lastView,
+                AVAX_COMPONENT_WIDTH);
+        }
+
+        if (showDetails && ptr[i].path != NULL && strlen(ptr[i].path) > 0) {
+            lastView = CreateTransactionItemViewWithWidth(
+                parent,
+                _("Path"),
+                ptr[i].path,
+                lastView,
+                AVAX_COMPONENT_WIDTH);
         }
     }
-    lv_obj_set_height(container, height);
-
-    return container;
+    return lastView;
 }
 
 void GuiAvaxTxOverview(lv_obj_t *parent, void *totalData)
 {
     DisplayAvaxTx *txData = (DisplayAvaxTx *)totalData;
-    lv_obj_set_size(parent, 408, 444);
-    lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(parent, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    GuiAvaxPrepareComponentParent(parent);
 
-    lv_obj_t *container = CreateValueOverviewValue(parent, "Value", txData->data->amount, "Fee", txData->data->fee_amount);
+    lv_obj_t *lastView = CreateTransactionOverviewCardWithWidth(
+        parent,
+        _("Value"),
+        txData->data->amount,
+        _("Fee"),
+        txData->data->fee_amount,
+        AVAX_COMPONENT_WIDTH);
 
     if (txData->data->network != NULL) {
-        char *key[] = {txData->data->network_key, "Subnet ID"};
-        char *value[] = {txData->data->network, txData->data->subnet_id};
-        container = CreateDynamicInfoView(parent, key, value, NUMBER_OF_ARRAYS(key) - (txData->data->subnet_id ? 0 : 1));
-        GuiAlignToPrevObj(container, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
+        lastView = CreateTransactionItemViewWithWidth(
+            parent,
+            txData->data->network_key,
+            txData->data->network,
+            lastView,
+            AVAX_COMPONENT_WIDTH);
+        if (txData->data->subnet_id != NULL) {
+            lastView = CreateTransactionItemViewWithWidth(
+                parent, _("Subnet ID"), txData->data->subnet_id, lastView, AVAX_COMPONENT_WIDTH);
+        }
     }
 
     if (txData->data->method != NULL) {
-        container = CreateSingleInfoView(parent, txData->data->method->method_key, txData->data->method->method);
-        GuiAlignToPrevObj(container, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
+        lastView = CreateTransactionItemViewWithWidth(
+            parent,
+            txData->data->method->method_key,
+            txData->data->method->method,
+            lastView,
+            AVAX_COMPONENT_WIDTH);
     }
 
-    container = CreateTxOverviewFromTo(parent, txData->data->from->data, txData->data->from->size, txData->data->to->data, txData->data->to->size);
-    GuiAlignToPrevObj(container, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
-    lv_obj_update_layout(parent);
+    lastView = GuiAvaxAppendAddresses(
+        parent, lastView, _("From"), txData->data->from->data, txData->data->from->size, false);
+    GuiAvaxAppendAddresses(
+        parent, lastView, _("To"), txData->data->to->data, txData->data->to->size, false);
 }
 
 void GuiAvaxTxRawData(lv_obj_t *parent, void *totalData)
 {
     DisplayAvaxTx *txData = (DisplayAvaxTx *)totalData;
-    lv_obj_set_size(parent, 408, 444);
-    lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(parent, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    GuiAvaxPrepareComponentParent(parent);
 
-    lv_obj_t *container = NULL;
+    lv_obj_t *lastView = NULL;
     if (txData->data->network != NULL) {
-        char *key[] = {txData->data->network_key, "Subnet ID"};
-        char *value[] = {txData->data->network, txData->data->subnet_id};
-        container = CreateDynamicInfoView(parent, key, value, NUMBER_OF_ARRAYS(key) - (txData->data->subnet_id ? 0 : 1));
+        lastView = CreateTransactionItemViewWithWidth(
+            parent,
+            txData->data->network_key,
+            txData->data->network,
+            lastView,
+            AVAX_COMPONENT_WIDTH);
+        if (txData->data->subnet_id != NULL) {
+            lastView = CreateTransactionItemViewWithWidth(
+                parent, _("Subnet ID"), txData->data->subnet_id, lastView, AVAX_COMPONENT_WIDTH);
+        }
     }
 
     if (txData->data->method != NULL) {
         char startTime[BUFFER_SIZE_64] = {0}, endTime[BUFFER_SIZE_64] = {0};
-        uint8_t keyLen = 1;
+        lastView = CreateTransactionItemViewWithWidth(
+            parent,
+            txData->data->method->method_key,
+            txData->data->method->method,
+            lastView,
+            AVAX_COMPONENT_WIDTH);
         if (txData->data->method->start_time != 0 && txData->data->method->end_time != 0) {
             StampTimeToUtcTime(txData->data->method->start_time, startTime, sizeof(startTime));
             StampTimeToUtcTime(txData->data->method->end_time, endTime, sizeof(endTime));
-            keyLen = 3;
+            lastView = CreateTransactionItemViewWithWidth(
+                parent, _("Start time"), startTime, lastView, AVAX_COMPONENT_WIDTH);
+            lastView = CreateTransactionItemViewWithWidth(
+                parent, _("End Time"), endTime, lastView, AVAX_COMPONENT_WIDTH);
         }
-        char *key[] = {txData->data->method->method_key, "Start time", "End Time"};
-        char *value[] = {txData->data->method->method, startTime, endTime};
-        container = CreateDynamicInfoView(parent, key, value, keyLen);
-        GuiAlignToPrevObj(container, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
     }
 
-    container = CreateValueDetailValue(parent, txData->data->total_input_amount, txData->data->total_output_amount, txData->data->fee_amount);
-    GuiAlignToPrevObj(container, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
+    lastView = CreateTransactionItemViewWithWidth(
+        parent, _("Total Input"), txData->data->total_input_amount, lastView, AVAX_COMPONENT_WIDTH);
+    lastView = CreateTransactionItemViewWithWidth(
+        parent, _("Total Output"), txData->data->total_output_amount, lastView, AVAX_COMPONENT_WIDTH);
+    lastView = CreateTransactionItemViewWithWidth(
+        parent, _("Fee"), txData->data->fee_amount, lastView, AVAX_COMPONENT_WIDTH);
 
     if (txData->data->reward_address != NULL) {
-        container = CreateSingleInfoTwoLineView(parent, "Reward Address", txData->data->reward_address);
-        GuiAlignToPrevObj(container, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
+        lastView = CreateTransactionItemViewWithWidth(
+            parent, _("Reward Address"), txData->data->reward_address, lastView, AVAX_COMPONENT_WIDTH);
     }
 
-    container = CreateTxDetailsFromTo(parent, "From", txData->data->from->data, txData->data->from->size);
-    GuiAlignToPrevObj(container, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
-
-    container = CreateTxDetailsFromTo(parent, "To", txData->data->to->data, txData->data->to->size);
-    GuiAlignToPrevObj(container, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
-    lv_obj_update_layout(parent);
+    lastView = GuiAvaxAppendAddresses(
+        parent, lastView, _("From"), txData->data->from->data, txData->data->from->size, true);
+    GuiAvaxAppendAddresses(
+        parent, lastView, _("To"), txData->data->to->data, txData->data->to->size, true);
 }
 
 void FreeAvaxMemory(void)
