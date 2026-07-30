@@ -33,12 +33,23 @@ impl TxParser for WrappedPsbt {
             .inputs
             .iter()
             .any(|input| input.witness_utxo.is_some() && input.non_witness_utxo.is_none());
+        let estimated_signed_vbytes = self.estimated_signed_vbytes();
 
         match self.identify_fractal_bitcoin_tx() {
-            Some(custom_net) => {
-                self.normalize(inputs, outputs, &custom_net, has_witness_only_inputs)
-            }
-            None => self.normalize(inputs, outputs, &network, has_witness_only_inputs),
+            Some(custom_net) => self.normalize(
+                inputs,
+                outputs,
+                &custom_net,
+                has_witness_only_inputs,
+                estimated_signed_vbytes,
+            ),
+            None => self.normalize(
+                inputs,
+                outputs,
+                &network,
+                has_witness_only_inputs,
+                estimated_signed_vbytes,
+            ),
         }
     }
 

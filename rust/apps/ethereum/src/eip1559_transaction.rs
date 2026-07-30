@@ -48,7 +48,7 @@ impl Decodable for EIP1559Transaction {
 
 pub struct ParsedEIP1559Transaction {
     pub(crate) chain_id: u64,
-    pub(crate) nonce: u32,
+    pub(crate) nonce: String,
     pub(crate) max_priority_fee_per_gas: String,
     pub(crate) max_fee_per_gas: String,
     pub(crate) gas_limit: String,
@@ -64,9 +64,9 @@ impl From<EIP1559Transaction> for ParsedEIP1559Transaction {
     fn from(value: EIP1559Transaction) -> Self {
         Self {
             chain_id: value.chain_id,
-            nonce: value.nonce.as_u32(),
-            max_priority_fee_per_gas: normalize_price(value.max_priority_fee_per_gas.as_u64()),
-            max_fee_per_gas: normalize_price(value.max_fee_per_gas.as_u64()),
+            nonce: value.nonce.to_string(),
+            max_priority_fee_per_gas: normalize_price(value.max_priority_fee_per_gas),
+            max_fee_per_gas: normalize_price(value.max_fee_per_gas),
             gas_limit: value.gas_limit.to_string(),
             to: format!("0x{}", hex::encode(value.get_to())),
             value: normalize_value(value.value),
@@ -88,6 +88,23 @@ mod tests {
     extern crate std;
 
     #[test]
+    fn test_parsed_eip1559_transaction_preserves_large_nonce() {
+        let tx = EIP1559Transaction {
+            chain_id: 1,
+            nonce: U256::from(4_294_967_297_u64),
+            max_priority_fee_per_gas: U256::from(1),
+            max_fee_per_gas: U256::from(1),
+            gas_limit: U256::from(21_000),
+            action: TransactionAction::Call(H160::zero()),
+            value: U256::zero(),
+            input: vec![],
+        };
+
+        let parsed = ParsedEIP1559Transaction::from(tx);
+        assert_eq!(parsed.nonce, "4294967297");
+    }
+
+    #[test]
     fn test_parsed_eip1559_transaction() {
         let tx = EIP1559Transaction {
             chain_id: 1,
@@ -104,7 +121,7 @@ mod tests {
 
         let parsed = ParsedEIP1559Transaction::from(tx);
         assert_eq!(parsed.chain_id, 1);
-        assert_eq!(parsed.nonce, 42);
+        assert_eq!(parsed.nonce, "42");
         assert_eq!(parsed.max_priority_fee_per_gas, "2 Gwei");
         assert_eq!(parsed.max_fee_per_gas, "100 Gwei");
         assert_eq!(parsed.gas_limit, "21000");
@@ -150,7 +167,7 @@ mod tests {
 
         let parsed = ParsedEIP1559Transaction::from(tx);
         assert_eq!(parsed.chain_id, 1);
-        assert_eq!(parsed.nonce, 5);
+        assert_eq!(parsed.nonce, "5");
         assert_eq!(parsed.max_priority_fee_per_gas, "3 Gwei");
         assert_eq!(parsed.max_fee_per_gas, "150 Gwei");
         assert_eq!(parsed.gas_limit, "500000");
@@ -178,7 +195,7 @@ mod tests {
 
         let parsed = ParsedEIP1559Transaction::from(tx);
         assert_eq!(parsed.chain_id, 137);
-        assert_eq!(parsed.nonce, 10);
+        assert_eq!(parsed.nonce, "10");
         assert_eq!(parsed.value, "2");
         assert_eq!(parsed.input, "a9059cbb");
     }
@@ -274,6 +291,6 @@ mod tests {
         };
 
         let parsed = ParsedEIP1559Transaction::from(tx);
-        assert_eq!(parsed.nonce, 999999);
+        assert_eq!(parsed.nonce, "999999");
     }
 }

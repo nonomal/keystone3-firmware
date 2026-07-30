@@ -51,7 +51,7 @@ mod tests {
 
     fn create_test_transaction(input: String) -> ParsedEthereumTransaction {
         ParsedEthereumTransaction {
-            nonce: 0,
+            nonce: "0".to_string(),
             chain_id: 1,
             from: None,
             to: "0x0000000000000000000000000000000000000000".to_string(),

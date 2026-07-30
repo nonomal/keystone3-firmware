@@ -1,4 +1,6 @@
-use super::structs::{AvaxFromToInfo, AvaxMethodInfo, AvaxTxInfo, LengthPrefixedVec};
+use super::structs::{
+    AvaxFromToInfo, AvaxMethodInfo, AvaxTxInfo, LengthPrefixedVec, ParsedSizeAble,
+};
 use super::transferable::{TransferableInput, TransferableOutput};
 use super::tx_header::Header;
 use super::type_id::TypeId;
@@ -38,6 +40,30 @@ impl BaseTx {
     }
 
     pub fn parsed_size(&self) -> usize {
+        self.tx_size
+    }
+
+    pub fn validate_native_avax_assets(&self) -> Result<()> {
+        let network_id = self.tx_header.get_network_id();
+        if !self
+            .outputs
+            .iter()
+            .all(|output| output.asset_id().is_native_avax(network_id))
+            || !self
+                .inputs
+                .iter()
+                .all(|input| input.asset_id().is_native_avax(network_id))
+        {
+            return Err(AvaxError::InvalidTransaction(
+                "unsupported non-AVAX asset".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl ParsedSizeAble for BaseTx {
+    fn parsed_size(&self) -> usize {
         self.tx_size
     }
 }
@@ -133,7 +159,7 @@ impl TryFrom<Bytes> for BaseTx {
         let memo = bytes.split_to(memo_len as usize).to_vec();
         let tx_size = initial_len - bytes.len();
 
-        Ok(BaseTx {
+        let transaction = BaseTx {
             codec_id,
             type_id,
             tx_header,
@@ -142,7 +168,9 @@ impl TryFrom<Bytes> for BaseTx {
             memo_len,
             memo,
             tx_size,
-        })
+        };
+        transaction.validate_native_avax_assets()?;
+        Ok(transaction)
     }
 }
 

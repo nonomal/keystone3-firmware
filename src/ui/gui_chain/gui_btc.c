@@ -603,7 +603,7 @@ void GetPsbtFeeAmount(void *indata, void *param, uint32_t maxLen)
     char feeText[BUFFER_SIZE_64] = {0};
     FormatFeeText(feeText, sizeof(feeText), psbt->overview->fee_amount,
                   psbt->overview->fee_is_lower_bound, psbt->overview->fee_is_unknown);
-    if (psbt->overview->fee_larger_than_amount) {
+    if (psbt->overview->fee_larger_than_amount || psbt->overview->is_large_fee) {
         snprintf_s((char *)indata, maxLen, "#F55831 %s#", feeText);
     } else {
         strcpy_s((char *)indata, maxLen, feeText);
@@ -622,7 +622,7 @@ void GetPsbtFeeSat(void *indata, void *param, uint32_t maxLen)
     char feeText[BUFFER_SIZE_64] = {0};
     FormatFeeText(feeText, sizeof(feeText), psbt->overview->fee_sat,
                   psbt->overview->fee_is_lower_bound, psbt->overview->fee_is_unknown);
-    if (psbt->overview->fee_larger_than_amount) {
+    if (psbt->overview->fee_larger_than_amount || psbt->overview->is_large_fee) {
         snprintf_s((char *)indata, maxLen, "#F55831 %s#", feeText);
     } else {
         strcpy_s((char *)indata, maxLen, feeText);
@@ -1013,7 +1013,7 @@ static lv_obj_t *CreateOverviewAmountView(lv_obj_t *parent, DisplayTxOverview *o
     lv_obj_align_to(feeValue, label, LV_ALIGN_OUT_RIGHT_MID, 16, 0);
     SetContentLableStyle(feeValue);
 
-    if (overviewData->fee_larger_than_amount) {
+    if (overviewData->fee_larger_than_amount || overviewData->is_large_fee) {
         lv_obj_set_style_text_color(feeValue, lv_color_hex(0xf55831), LV_PART_MAIN);
     } else {
         lv_obj_set_style_text_color(feeValue, WHITE_COLOR, LV_PART_MAIN);
@@ -1462,6 +1462,10 @@ void GuiBtcTxOverview(lv_obj_t *parent, void *totalData)
 
     if (NeedShowSighashWarning(txData)) {
         lastView = CreateSighashWarningView(parent, lastView, GetSighashWarningText(txData));
+    }
+
+    if (overviewData->is_large_fee) {
+        lastView = CreateSighashWarningView(parent, lastView, _("btc_large_fee_warning"));
     }
 
     if (NeedShowCheckInputValueHint(txData)) {

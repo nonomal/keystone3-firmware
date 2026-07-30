@@ -60,6 +60,7 @@ pub struct DisplayTxOverview {
     network: PtrString,
     is_multisig: bool,
     fee_larger_than_amount: bool,
+    is_large_fee: bool,
     sign_status: PtrString,
     need_sign: bool,
     has_witness_only_inputs: bool,
@@ -138,6 +139,7 @@ impl From<OverviewTx> for DisplayTxOverview {
             total_output_amount: convert_c_char(value.total_output_amount),
             fee_amount: convert_c_char(value.fee_amount),
             fee_larger_than_amount: value.fee_larger_than_amount,
+            is_large_fee: value.is_large_fee,
             total_output_sat: convert_c_char(value.total_output_sat),
             fee_sat: convert_c_char(value.fee_sat),
             from: VecFFI::from(

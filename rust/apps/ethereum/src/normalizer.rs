@@ -1,40 +1,35 @@
 use alloc::format;
 use alloc::string::{String, ToString};
-use core::ops::Div;
 use ethereum_types::U256;
 
-const F_DIVIDER: f64 = 1_000_000_000f64;
-
-pub fn normalize_price(gas: u64) -> String {
-    format!("{} Gwei", (gas as f64).div(F_DIVIDER))
-}
-
-pub fn normalize_value(value: U256) -> String {
+fn normalize_units(value: U256, decimals: usize) -> String {
     let value_str = value.to_string();
     if value_str == "0" {
         return "0".to_string();
     }
 
-    let padded_value = format!("{value_str:0>18}");
+    let padded_value = format!("{value_str:0>decimals$}");
     let len = padded_value.len();
+    if len <= decimals {
+        let decimal = padded_value.trim_end_matches('0');
+        return format!("0.{decimal}");
+    }
 
-    let res = if len <= 18 {
-        let val = padded_value.trim_end_matches('0');
-        if val.is_empty() {
-            "0".to_string()
-        } else {
-            format!("0.{val}")
-        }
+    let (int_part, decimal_part) = padded_value.split_at(len - decimals);
+    let decimal = decimal_part.trim_end_matches('0');
+    if decimal.is_empty() {
+        int_part.to_string()
     } else {
-        let (int_part, decimal_part) = padded_value.split_at(len - 18);
-        let decimal = decimal_part.trim_end_matches('0');
-        if decimal.is_empty() {
-            int_part.to_string()
-        } else {
-            format!("{int_part}.{decimal}")
-        }
-    };
-    res
+        format!("{int_part}.{decimal}")
+    }
+}
+
+pub fn normalize_price(gas: U256) -> String {
+    format!("{} Gwei", normalize_units(gas, 9))
+}
+
+pub fn normalize_value(value: U256) -> String {
+    normalize_units(value, 18)
 }
 
 #[cfg(test)]
@@ -97,16 +92,25 @@ mod tests {
 
     #[test]
     fn test_normalize_price() {
-        let gas = 1000000000u64; // 1 Gwei
+        let gas = U256::from(1000000000u64); // 1 Gwei
         let result = normalize_price(gas);
         assert_eq!("1 Gwei", result);
 
-        let gas = 20000000000u64; // 20 Gwei
+        let gas = U256::from(20000000000u64); // 20 Gwei
         let result = normalize_price(gas);
         assert_eq!("20 Gwei", result);
 
-        let gas = 500000000u64; // 0.5 Gwei
+        let gas = U256::from(500000000u64); // 0.5 Gwei
         let result = normalize_price(gas);
         assert_eq!("0.5 Gwei", result);
+    }
+
+    #[test]
+    fn test_normalize_price_max_u256() {
+        let result = normalize_price(U256::MAX);
+        assert_eq!(
+            "115792089237316195423570985008687907853269984665640564039457584007913.129639935 Gwei",
+            result
+        );
     }
 }

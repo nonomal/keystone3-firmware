@@ -60,6 +60,7 @@ pub struct OverviewTx {
     pub to: Vec<OverviewTo>,
     pub network: String,
     pub fee_larger_than_amount: bool,
+    pub is_large_fee: bool,
     pub is_multisig: bool,
     pub sign_status: Option<String>,
     pub need_sign: bool,
@@ -214,6 +215,7 @@ pub trait TxParser {
         outputs: Vec<ParsedOutput>,
         network: &dyn NetworkT,
         has_witness_only_inputs: bool,
+        estimated_signed_vbytes: Option<u64>,
     ) -> Result<ParsedTx> {
         let total_input_value = inputs.iter().fold(0, |acc, cur| acc + cur.value);
         let total_output_value = outputs.iter().fold(0, |acc, cur| acc + cur.value);
@@ -232,6 +234,15 @@ pub trait TxParser {
             has_unlocked_outputs || (has_anyone_can_pay && total_input_value < total_output_value);
         let fee_is_lower_bound = has_anyone_can_pay && !fee_is_unknown;
         let fee = total_input_value.saturating_sub(total_output_value);
+        const LARGE_FEE_SATS: u64 = 5_000_000;
+        const LARGE_FEE_RATE_SAT_PER_VBYTE: u64 = 100;
+        let is_large_fee = !fee_is_unknown
+            && (fee > LARGE_FEE_SATS
+                || estimated_signed_vbytes
+                    .filter(|vbytes| *vbytes > 0)
+                    .is_some_and(|vbytes| {
+                        fee > LARGE_FEE_RATE_SAT_PER_VBYTE.saturating_mul(vbytes)
+                    }));
         let fee_amount = Self::format_amount(fee, network);
         let fee_sat = Self::format_sat(fee);
         let overview_amount = outputs.iter().fold(0, |acc, cur| {
@@ -277,6 +288,7 @@ pub trait TxParser {
             to: overview_to,
             network: network.normalize(),
             fee_larger_than_amount: fee > overview_amount,
+            is_large_fee,
             is_multisig: inputs.iter().any(|v| v.is_multisig),
             need_sign: Self::is_need_sign(&inputs),
         };
@@ -438,6 +450,7 @@ mod tests {
                 vec![build_output(600)],
                 &Network::Bitcoin,
                 false,
+                None,
             )
             .unwrap();
 
@@ -459,6 +472,7 @@ mod tests {
                 vec![build_output(1_000)],
                 &Network::Bitcoin,
                 false,
+                None,
             )
             .unwrap();
 
@@ -481,6 +495,7 @@ mod tests {
                     vec![build_output(600)],
                     &Network::Bitcoin,
                     false,
+                    None,
                 )
                 .unwrap();
 
@@ -493,5 +508,41 @@ mod tests {
             assert_eq!("0.000004 BTC", parsed.detail.fee_amount);
             assert_eq!("400 sats", parsed.detail.fee_sat);
         }
+    }
+
+    #[test]
+    fn test_large_fee_thresholds() {
+        let absolute_large = DummyParser
+            .normalize(
+                vec![build_input_with_value(6_000_001, 0x01)],
+                vec![build_output(1_000_000)],
+                &Network::Bitcoin,
+                false,
+                None,
+            )
+            .unwrap();
+        assert!(absolute_large.overview.is_large_fee);
+
+        let rate_large = DummyParser
+            .normalize(
+                vec![build_input_with_value(20_001, 0x01)],
+                vec![build_output(10_000)],
+                &Network::Bitcoin,
+                false,
+                Some(100),
+            )
+            .unwrap();
+        assert!(rate_large.overview.is_large_fee);
+
+        let exact_limits = DummyParser
+            .normalize(
+                vec![build_input_with_value(5_010_000, 0x01)],
+                vec![build_output(10_000)],
+                &Network::Bitcoin,
+                false,
+                Some(50_000),
+            )
+            .unwrap();
+        assert!(!exact_limits.overview.is_large_fee);
     }
 }

@@ -285,7 +285,18 @@ pub unsafe extern "C" fn avax_check_transaction(
         }
     };
 
-    match avax_tx.get_derivation_path()[0].get_source_fingerprint() {
+    let derivation_paths = avax_tx.get_derivation_path();
+    let first_path = match derivation_paths.first() {
+        Some(path) => path,
+        None => {
+            return TransactionCheckResult::from(RustCError::InvalidData(
+                "missing derivation path".to_string(),
+            ))
+            .c_ptr();
+        }
+    };
+
+    match first_path.get_source_fingerprint() {
         Some(fingerprint) if fingerprint == mfp => TransactionCheckResult::new().c_ptr(),
         _ => TransactionCheckResult::from(RustCError::MasterFingerprintMismatch).c_ptr(),
     }

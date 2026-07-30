@@ -125,6 +125,10 @@ impl TransferableInput {
     pub fn get_amount(&self) -> u64 {
         self.input.get_amount()
     }
+
+    pub fn asset_id(&self) -> &AssetId {
+        &self.asset_id
+    }
 }
 
 impl TryFrom<Bytes> for TransferableInput {

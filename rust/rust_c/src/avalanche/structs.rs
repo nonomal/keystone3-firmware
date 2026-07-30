@@ -2,7 +2,6 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use app_avalanche::constants::NAVAX_TO_AVAX_RATIO;
 use core::ptr::null_mut;
 use ur_registry::pb::protoc::payload::Type;
 
@@ -75,7 +74,7 @@ impl DisplayAvaxFromToInfo {
         from_infos: &[(String, String)],
         type_id: TypeId,
     ) -> Self {
-        let address = value.address.first().unwrap().clone();
+        let address = value.address.first().cloned().unwrap_or_default();
         let matched_path = from_infos
             .iter()
             .find(|(_, from_address)| *from_address == address)
@@ -94,10 +93,7 @@ impl DisplayAvaxFromToInfo {
         };
         DisplayAvaxFromToInfo {
             address: convert_c_char(address.clone()),
-            amount: convert_c_char(format!(
-                "{} AVAX",
-                value.amount as f64 / NAVAX_TO_AVAX_RATIO
-            )),
+            amount: convert_c_char(format_avax(value.amount)),
             is_change,
             path,
         }
@@ -152,10 +148,7 @@ impl DisplayTxAvaxData {
         from_address: String,
         type_id: TypeId,
     ) -> Self {
-        let total_input_amount = format!(
-            "{} AVAX",
-            value.get_total_input_amount() as f64 / NAVAX_TO_AVAX_RATIO
-        );
+        let total_input_amount = format_avax(value.get_total_input_amount());
 
         let from = VecFFI::from(
             from_infos
@@ -176,23 +169,13 @@ impl DisplayTxAvaxData {
 
         DisplayTxAvaxData {
             from,
-            amount: convert_c_char(format!(
-                "{} AVAX",
-                value.get_output_amount(from_address.clone(), type_id) as f64 / NAVAX_TO_AVAX_RATIO
+            amount: convert_c_char(format_avax(
+                value.get_output_amount(from_address.clone(), type_id),
             )),
 
-            total_input_amount: convert_c_char(format!(
-                "{} AVAX",
-                value.get_total_input_amount() as f64 / NAVAX_TO_AVAX_RATIO
-            )),
-            total_output_amount: convert_c_char(format!(
-                "{} AVAX",
-                value.get_total_output_amount() as f64 / NAVAX_TO_AVAX_RATIO
-            )),
-            fee_amount: convert_c_char(format!(
-                "{} AVAX",
-                value.get_fee_amount() as f64 / NAVAX_TO_AVAX_RATIO
-            )),
+            total_input_amount: convert_c_char(format_avax(value.get_total_input_amount())),
+            total_output_amount: convert_c_char(format_avax(value.get_total_output_amount())),
+            fee_amount: convert_c_char(format_avax(value.get_fee_amount())),
             to: VecFFI::from(
                 value
                     .get_outputs_addresses()
@@ -240,8 +223,25 @@ impl Free for DisplayTxAvaxData {
         free_str_ptr!(self.total_input_amount);
         free_str_ptr!(self.fee_amount);
         free_str_ptr!(self.reward_address);
-        Box::from_raw(self.method);
+        if !self.method.is_null() {
+            Box::from_raw(self.method).free();
+        }
     }
+}
+
+fn format_avax(value: u64) -> String {
+    const NAVAX_PER_AVAX: u64 = 1_000_000_000;
+    let whole = value / NAVAX_PER_AVAX;
+    let fraction = value % NAVAX_PER_AVAX;
+    if fraction == 0 {
+        return format!("{} AVAX", whole);
+    }
+
+    let mut fraction_string = format!("{:09}", fraction);
+    while fraction_string.ends_with('0') {
+        fraction_string.pop();
+    }
+    format!("{}.{} AVAX", whole, fraction_string)
 }
 
 impl Free for DisplayAvaxTx {

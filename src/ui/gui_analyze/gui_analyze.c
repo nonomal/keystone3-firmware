@@ -421,6 +421,18 @@ void GuiWidgetBaseInit(lv_obj_t *obj, cJSON *json)
     cJSON *childrenArray = cJSON_GetObjectItem(json, "children");
     if (childrenArray != NULL) {
         for (cJSON *child = childrenArray->child; child != NULL; child = child->next) {
+#ifdef FEATURE_SOLANA
+            cJSON *type = cJSON_GetObjectItem(child, "type");
+            cJSON *textFunc = cJSON_GetObjectItem(child, "text_func");
+            if (type != NULL && textFunc != NULL &&
+                !strcmp(type->valuestring, "label") &&
+                (!strcmp(textFunc->valuestring, "GetSolMessageUtf8") ||
+                 !strcmp(textFunc->valuestring, "GetSolMessageRaw"))) {
+                GuiShowSolMessagePaged(obj, g_totalData,
+                                       !strcmp(textFunc->valuestring, "GetSolMessageRaw"));
+                continue;
+            }
+#endif
             GuiWidgetFactoryCreate(obj, child);
         }
     }

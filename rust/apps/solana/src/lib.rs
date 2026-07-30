@@ -34,11 +34,15 @@ mod solana_lib;
 pub mod structs;
 pub mod utils;
 pub fn parse_message(tx_hex: Vec<u8>, from_key: &String) -> errors::Result<SolanaMessage> {
-    let raw_message = hex::encode(tx_hex.clone());
-    let mut utf8_message = String::from_utf8(tx_hex).unwrap_or_else(|_| "".to_string());
-    if app_utils::is_cjk(&utf8_message) {
-        utf8_message = "".to_string();
-    }
+    // Keep only the representation that is displayed. Retaining both the
+    // UTF-8 string and its hex encoding doubles peak memory for long messages.
+    let (raw_message, utf8_message) = match String::from_utf8(tx_hex) {
+        Ok(message) if !message.as_bytes().contains(&0) && !app_utils::is_cjk(&message) => {
+            (String::new(), message)
+        }
+        Ok(message) => (hex::encode(message.as_bytes()), String::new()),
+        Err(error) => (hex::encode(error.as_bytes()), String::new()),
+    };
     SolanaMessage::from(raw_message, utf8_message, from_key)
 }
 
@@ -46,8 +50,32 @@ pub fn validate_tx(message: &mut Vec<u8>) -> bool {
     message::Message::validate(message)
 }
 
+pub fn has_tx_prefix(message: &mut Vec<u8>) -> bool {
+    message::Message::has_valid_prefix(message)
+}
+
+pub fn validate_tx_signer(message: &mut Vec<u8>, signer: &[u8; 32]) -> errors::Result<()> {
+    let transaction = message::Message::read_exact(message)?;
+    transaction.validate_signer(signer)
+}
+
+pub fn get_public_key(seed: &[u8], hd_path: &String) -> errors::Result<[u8; 32]> {
+    keystore::algorithms::ed25519::slip10_ed25519::get_public_key_by_seed(seed, hd_path).map_err(
+        |e| {
+            errors::SolanaError::KeystoreError(format!(
+                "derive public key failed {:?}",
+                e.to_string()
+            ))
+        },
+    )
+}
+
 pub fn parse(data: &Vec<u8>) -> errors::Result<ParsedSolanaTx> {
     ParsedSolanaTx::build(data)
+}
+
+pub fn parse_for_signer(data: &Vec<u8>, signer: &[u8; 32]) -> errors::Result<ParsedSolanaTx> {
+    ParsedSolanaTx::build_for_signer(data, signer)
 }
 
 pub fn sign(message: Vec<u8>, hd_path: &String, seed: &[u8]) -> errors::Result<[u8; 64]> {

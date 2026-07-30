@@ -28,6 +28,20 @@ pub struct AddPermissionlessValidatorTx {
     delegator_share: u32,
 }
 
+impl ParsedSizeAble for AddPermissionlessValidatorTx {
+    fn parsed_size(&self) -> usize {
+        self.base_tx.parsed_size()
+            + self.validator.parsed_size()
+            + SUBNET_ID_LEN
+            + PROOF_OF_POSESSION_PUBKEY_LEN
+            + PROOF_OF_POSESSION_SIGNATURE_LEN
+            + self.stake_out.parsed_size()
+            + self.validator_owner.parsed_size()
+            + self.delegator_owner.parsed_size()
+            + 4
+    }
+}
+
 impl AvaxTxInfo for AddPermissionlessValidatorTx {
     fn get_total_input_amount(&self) -> u64 {
         self.base_tx.get_total_input_amount()
@@ -109,7 +123,7 @@ impl TryFrom<Bytes> for AddPermissionlessValidatorTx {
 
         let delegator_share = bytes.get_u32();
 
-        Ok(AddPermissionlessValidatorTx {
+        let transaction = AddPermissionlessValidatorTx {
             base_tx,
             validator,
             subnet_id,
@@ -118,7 +132,18 @@ impl TryFrom<Bytes> for AddPermissionlessValidatorTx {
             validator_owner,
             delegator_owner,
             delegator_share,
-        })
+        };
+        let network_id = transaction.base_tx.tx_header.get_network_id();
+        if !transaction
+            .stake_out
+            .iter()
+            .all(|output| output.asset_id().is_native_avax(network_id))
+        {
+            return Err(AvaxError::InvalidTransaction(
+                "unsupported non-AVAX asset".to_string(),
+            ));
+        }
+        Ok(transaction)
     }
 }
 

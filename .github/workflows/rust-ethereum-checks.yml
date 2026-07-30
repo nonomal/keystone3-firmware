@@ -27,4 +27,4 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Run rust/apps/ethereum
-        run: cd rust/apps/ethereum && cargo +$RUST_TOOLCHAIN llvm-cov --fail-under-regions 72 --fail-under-functions 64 --fail-under-lines 76 --ignore-filename-regex 'keystore/*|utils/*'
+        run: cd rust/apps/ethereum && cargo +$RUST_TOOLCHAIN llvm-cov --fail-under-regions 73 --fail-under-functions 64 --fail-under-lines 76 --ignore-filename-regex 'keystore/*|utils/*'

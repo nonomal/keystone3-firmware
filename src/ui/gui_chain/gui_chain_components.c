@@ -1,4 +1,17 @@
 #include "gui_chain_components.h"
+#include <string.h>
+
+const lv_font_t *GetOverviewAmountFont(const char *value)
+{
+    size_t length = strlen(value);
+    if (length <= 24) {
+        return g_defLittleTitleFont;
+    }
+    if (length <= 40) {
+        return g_defTextFont;
+    }
+    return g_defIllustrateFont;
+}
 
 lv_obj_t* CreateRelativeTransactionContentContainer(lv_obj_t *parent, uint16_t w, uint16_t h, lv_obj_t *last_view)
 {
@@ -20,6 +33,11 @@ lv_obj_t *CreateTransactionContentContainer(lv_obj_t *parent, uint16_t w, uint16
 
 lv_obj_t *CreateTransactionItemViewWithHint(lv_obj_t *parent, const char* title, const char* value, lv_obj_t *lastView, const char* hint)
 {
+    return CreateTransactionItemViewWithHintAndWidth(parent, title, value, lastView, hint, 408);
+}
+
+lv_obj_t *CreateTransactionItemViewWithHintAndWidth(lv_obj_t *parent, const char* title, const char* value, lv_obj_t *lastView, const char* hint, uint16_t width)
+{
     //basic style:
     // ______________________________
     //|#############16px#############|
@@ -38,7 +56,7 @@ lv_obj_t *CreateTransactionItemViewWithHint(lv_obj_t *parent, const char* title,
 
     //62 is the basic height = 16 + 30 + 16
     uint16_t height = 62;
-    lv_obj_t *container = CreateTransactionContentContainer(parent, 408, height);
+    lv_obj_t *container = CreateTransactionContentContainer(parent, width, height);
     if (lastView != NULL) {
         lv_obj_align_to(container, lastView, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
     }
@@ -57,12 +75,12 @@ lv_obj_t *CreateTransactionItemViewWithHint(lv_obj_t *parent, const char* title,
     uint16_t valueHeight = lv_obj_get_height(valueLabel);
 
     uint16_t totalWidth = 24 + titleWidth + 16 + valueWidth + 24;
-    bool overflow = totalWidth > 408 || valueHeight > 30;
+    bool overflow = totalWidth > width || valueHeight > 30;
     if (!overflow) {
         lv_obj_align_to(valueLabel, titleLabel, LV_ALIGN_OUT_RIGHT_MID, 16, 0);
     } else {
         lv_obj_align_to(valueLabel, titleLabel, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 0);
-        lv_obj_set_width(valueLabel, 360);
+        lv_obj_set_width(valueLabel, width - 48);
         lv_label_set_long_mode(valueLabel, LV_LABEL_LONG_WRAP);
         lv_obj_update_layout(valueLabel);
 
@@ -75,7 +93,7 @@ lv_obj_t *CreateTransactionItemViewWithHint(lv_obj_t *parent, const char* title,
         lv_obj_t *hintLabel = GuiCreateIllustrateLabel(container, hint);
         lv_obj_align_to(hintLabel, valueLabel, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 4);
         height += 4;
-        lv_obj_set_width(hintLabel, 360);
+        lv_obj_set_width(hintLabel, width - 48);
         lv_obj_set_style_text_color(hintLabel, ORANGE_COLOR, LV_PART_MAIN);
         lv_label_set_long_mode(hintLabel, LV_LABEL_LONG_WRAP);
         lv_obj_update_layout(hintLabel);
@@ -93,10 +111,20 @@ lv_obj_t *CreateTransactionItemView(lv_obj_t *parent, const char* title, const c
     return CreateTransactionItemViewWithHint(parent, title, value, lastView, NULL);
 }
 
+lv_obj_t *CreateTransactionItemViewWithWidth(lv_obj_t *parent, const char* title, const char* value, lv_obj_t *lastView, uint16_t width)
+{
+    return CreateTransactionItemViewWithHintAndWidth(parent, title, value, lastView, NULL, width);
+}
+
 lv_obj_t *CreateTransactionOvewviewCard(lv_obj_t *parent, const char* title1, const char* text1, const char* title2, const char* text2)
 {
+    return CreateTransactionOverviewCardWithWidth(parent, title1, text1, title2, text2, 408);
+}
+
+lv_obj_t *CreateTransactionOverviewCardWithWidth(lv_obj_t *parent, const char* title1, const char* text1, const char* title2, const char* text2, uint16_t width)
+{
     uint16_t height = 16;//top padding
-    lv_obj_t *container = CreateTransactionContentContainer(parent, 408, 0);
+    lv_obj_t *container = CreateTransactionContentContainer(parent, width, 0);
     lv_obj_align(container, LV_ALIGN_TOP_LEFT, 0, 4);
 
     lv_obj_t *label;
@@ -105,8 +133,9 @@ lv_obj_t *CreateTransactionOvewviewCard(lv_obj_t *parent, const char* title1, co
     lv_obj_set_style_text_opa(label, LV_OPA_64, LV_PART_MAIN);
 
     height += 30 + 4;
-    label = GuiCreateLittleTitleLabel(container, text1);
-    lv_obj_set_width(label, 360);
+    label = GuiCreateLabelWithFont(container, text1, GetOverviewAmountFont(text1));
+    lv_obj_set_width(label, width - 48);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
     lv_obj_update_layout(label);
     lv_obj_set_style_text_color(label, ORANGE_COLOR, LV_PART_MAIN);
     lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, height);
@@ -130,7 +159,7 @@ lv_obj_t *CreateTransactionOvewviewCard(lv_obj_t *parent, const char* title1, co
     uint16_t valueHeight = lv_obj_get_height(valueLabel);
 
     uint16_t totalWidth = 24 + titleWidth + 16 + valueWidth + 24;
-    bool overflow = totalWidth > 408 || valueHeight > 30;
+    bool overflow = totalWidth > width || valueHeight > 30;
 
     height += 30; //title height;
 
@@ -138,7 +167,7 @@ lv_obj_t *CreateTransactionOvewviewCard(lv_obj_t *parent, const char* title1, co
         lv_obj_align_to(valueLabel, titleLabel, LV_ALIGN_OUT_RIGHT_MID, 16, 0);
     } else {
         lv_obj_align_to(valueLabel, titleLabel, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 0);
-        lv_obj_set_width(valueLabel, 360);
+        lv_obj_set_width(valueLabel, width - 48);
         lv_label_set_long_mode(valueLabel, LV_LABEL_LONG_WRAP);
         lv_obj_update_layout(valueLabel);
 

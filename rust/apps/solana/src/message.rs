@@ -71,9 +71,14 @@ pub struct Message {
 
 impl Read<Message> for Message {
     fn read(raw: &mut Vec<u8>) -> Result<Message> {
-        let first_byte = raw.first();
+        let first_byte = raw.first().copied();
         let is_versioned = match first_byte {
             Some(0x80) => true,
+            Some(value) if value & 0x80 != 0 => {
+                return Err(SolanaError::InvalidData(
+                    "unsupported message version".to_string(),
+                ))
+            }
             Some(_) => false,
             None => return Err(SolanaError::InvalidData("empty message".to_string())),
         };
@@ -88,37 +93,127 @@ impl Read<Message> for Message {
             true => Some(Compact::read(raw)?.data),
             false => None,
         };
-        Ok(Message {
+        let message = Message {
             is_versioned,
             header,
             accounts,
             block_hash,
             instructions,
             address_table_lookups,
-        })
+        };
+        message.validate_structure()?;
+        Ok(message)
     }
 }
 
 impl Message {
+    pub fn read_exact(raw: &mut Vec<u8>) -> Result<Message> {
+        let message = Self::read(raw)?;
+        if !raw.is_empty() {
+            return Err(SolanaError::InvalidData(
+                "trailing bytes after message".to_string(),
+            ));
+        }
+        Ok(message)
+    }
+
+    pub fn validate_signer(&self, signer: &[u8; 32]) -> Result<()> {
+        let required_signatures = self.header.num_required_signatures as usize;
+        if required_signatures == 0 {
+            return Err(SolanaError::InvalidData(
+                "transaction does not require a signer".to_string(),
+            ));
+        }
+        if self.accounts[..required_signatures]
+            .iter()
+            .any(|account| account.value.as_slice() == signer)
+        {
+            return Ok(());
+        }
+        Err(SolanaError::InvalidData(
+            "derived key is not a required transaction signer".to_string(),
+        ))
+    }
+
+    fn validate_structure(&self) -> Result<()> {
+        let static_account_count = self.accounts.len();
+        let required_signatures = self.header.num_required_signatures as usize;
+        let readonly_signed = self.header.num_readonly_signed_accounts as usize;
+        let readonly_unsigned = self.header.num_readonly_unsigned_accounts as usize;
+
+        if required_signatures > static_account_count {
+            return Err(SolanaError::InvalidData(
+                "required signatures exceed static accounts".to_string(),
+            ));
+        }
+        if readonly_signed > required_signatures {
+            return Err(SolanaError::InvalidData(
+                "readonly signed accounts exceed required signatures".to_string(),
+            ));
+        }
+        if readonly_unsigned > static_account_count.saturating_sub(required_signatures) {
+            return Err(SolanaError::InvalidData(
+                "readonly unsigned accounts exceed unsigned accounts".to_string(),
+            ));
+        }
+
+        let loaded_account_count = self
+            .address_table_lookups
+            .as_ref()
+            .map(|lookups| {
+                lookups.iter().fold(0usize, |count, lookup| {
+                    count
+                        .saturating_add(lookup.writable_indexes.len())
+                        .saturating_add(lookup.readonly_indexes.len())
+                })
+            })
+            .unwrap_or(0);
+        let account_count = static_account_count.saturating_add(loaded_account_count);
+
+        for instruction in &self.instructions {
+            if instruction.program_index as usize >= account_count {
+                return Err(SolanaError::InvalidData(
+                    "program index exceeds account list".to_string(),
+                ));
+            }
+            if instruction
+                .account_indexes
+                .iter()
+                .any(|index| *index as usize >= account_count)
+            {
+                return Err(SolanaError::InvalidData(
+                    "instruction account index exceeds account list".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn to_program_details(&self) -> Result<Vec<SolanaDetail>> {
-        let accounts = self.prepare_accounts();
+        let resolved_accounts = self.prepare_accounts();
         self.instructions
             .iter()
             .map(|instruction| {
-                let accounts = instruction
+                let instruction_accounts = instruction
                     .account_indexes
                     .iter()
                     .map(|account_index| {
-                        accounts
+                        resolved_accounts
                             .get(*account_index as usize)
                             .map(|v| v.to_string())
                             .unwrap_or("Unknown Account".to_string())
                     })
                     .collect::<Vec<String>>();
-                let program_account =
-                    base58::encode(&self.accounts[usize::from(instruction.program_index)].value);
+                let program_account = resolved_accounts
+                    .get(usize::from(instruction.program_index))
+                    .ok_or_else(|| {
+                        SolanaError::InvalidData(
+                            "program index exceeds resolved account list".to_string(),
+                        )
+                    })?
+                    .to_string();
                 // parse instruction data
-                match instruction.parse(&program_account, accounts.clone()) {
+                match instruction.parse(&program_account, instruction_accounts.clone()) {
                     Ok(value) => Ok(value),
                     Err(_) => Ok(SolanaDetail {
                         common: CommonDetail {
@@ -127,7 +222,7 @@ impl Message {
                         },
                         kind: ProgramDetail::Instruction(ProgramDetailInstruction {
                             data: base58::encode(&instruction.data),
-                            accounts,
+                            accounts: instruction_accounts,
                             program_account,
                         }),
                     }),
@@ -137,6 +232,10 @@ impl Message {
     }
 
     pub fn validate(raw: &mut Vec<u8>) -> bool {
+        Self::read_exact(raw).is_ok()
+    }
+
+    pub fn has_valid_prefix(raw: &mut Vec<u8>) -> bool {
         Self::read(raw).is_ok()
     }
 
@@ -223,5 +322,69 @@ impl Read<MessageAddressTableLookup> for MessageAddressTableLookup {
             writable_indexes,
             readonly_indexes,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    use super::Message;
+
+    fn minimal_legacy_message() -> Vec<u8> {
+        let mut message = vec![1, 0, 0, 1];
+        message.extend_from_slice(&[0u8; 32]);
+        message.extend_from_slice(&[0u8; 32]);
+        message.push(0);
+        message
+    }
+
+    fn system_transfer_message() -> Vec<u8> {
+        let mut message = vec![1, 0, 1, 3];
+        message.extend_from_slice(&[0x11u8; 32]);
+        message.extend_from_slice(&[0x22u8; 32]);
+        message.extend_from_slice(&[0u8; 32]);
+        message.extend_from_slice(&[0x77u8; 32]);
+        message.extend_from_slice(&[
+            1, // instruction count
+            2, // System Program index in the complete account list
+            2, 0, 1, // account indexes
+            12, 2, 0, 0, 0, // SystemInstruction::Transfer
+            0, 202, 154, 59, 0, 0, 0, 0, // 1 SOL
+        ]);
+        message
+    }
+
+    #[test]
+    fn exact_parser_rejects_trailing_bytes() {
+        let mut message = minimal_legacy_message();
+        assert!(Message::read_exact(&mut message).is_ok());
+
+        let mut message_with_suffix = minimal_legacy_message();
+        message_with_suffix.push(0xaa);
+        assert!(Message::read_exact(&mut message_with_suffix).is_err());
+
+        let mut message_with_suffix = minimal_legacy_message();
+        message_with_suffix.push(0xaa);
+        assert!(Message::has_valid_prefix(&mut message_with_suffix));
+    }
+
+    #[test]
+    fn rejects_unsupported_versions_and_invalid_headers() {
+        assert!(Message::read_exact(&mut vec![0x81]).is_err());
+
+        let mut invalid_header = minimal_legacy_message();
+        invalid_header[0] = 2;
+        assert!(Message::read_exact(&mut invalid_header).is_err());
+    }
+
+    #[test]
+    fn resolves_program_index_from_complete_account_list() {
+        let message = Message::read_exact(&mut system_transfer_message()).unwrap();
+        let details = message.to_program_details().unwrap();
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].common.program, "System");
+        assert_eq!(details[0].common.method, "Transfer");
     }
 }

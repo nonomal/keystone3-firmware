@@ -96,25 +96,31 @@ pub enum SquadsInstructions {
 impl Dispatch for SquadsInstructions {
     fn dispatch(instrucion_data: &[u8]) -> Result<Self, ProgramError> {
         let data = instrucion_data;
+        if data.len() < 8 {
+            return Err(SquadsV4Error::InvalidInstruction.into());
+        }
         let ix_type = &data[..8];
         let ix_data = &data[8..];
         match hex::encode(ix_type).as_str() {
             "7a4d509f54585ac5" => {
                 // sighash(SIGHASH_GLOBAL_NAMESPACE, "multisig_create")
                 Ok(SquadsInstructions::MultisigCreate(
-                    from_slice::<MultisigCreateArgs>(ix_data).unwrap(),
+                    from_slice::<MultisigCreateArgs>(ix_data)
+                        .map_err(|_| SquadsV4Error::InvalidInstruction)?,
                 ))
             }
             "32ddc75d28f58be9" => {
                 // sighash(SIGHASH_GLOBAL_NAMESPACE, "multisig_create_v2")
                 Ok(SquadsInstructions::MultisigCreateV2(
-                    from_slice::<MultisigCreateArgsV2>(ix_data).unwrap(),
+                    from_slice::<MultisigCreateArgsV2>(ix_data)
+                        .map_err(|_| SquadsV4Error::InvalidInstruction)?,
                 ))
             }
             "dc3c49e01e6c4f9f" => {
                 // sighash(SIGHASH_GLOBAL_NAMESPACE, "proposal_create")
                 Ok(SquadsInstructions::ProposalCreate(
-                    from_slice::<ProposalCreateArgs>(ix_data).unwrap(),
+                    from_slice::<ProposalCreateArgs>(ix_data)
+                        .map_err(|_| SquadsV4Error::InvalidInstruction)?,
                 ))
             }
             "0b225cf89a1b336a" => {
@@ -124,26 +130,30 @@ impl Dispatch for SquadsInstructions {
             "9025a488bcd82af8" => {
                 // sighash(SIGHASH_GLOBAL_NAMESPACE, "proposal_approve")
                 Ok(SquadsInstructions::ProposalApprove(
-                    from_slice::<ProposalVoteArgs>(ix_data).unwrap(),
+                    from_slice::<ProposalVoteArgs>(ix_data)
+                        .map_err(|_| SquadsV4Error::InvalidInstruction)?,
                 ))
             }
             "1b2a7fed26a354cb" => {
                 // sighash(SIGHASH_GLOBAL_NAMESPACE, "proposal_cancel")
                 Ok(SquadsInstructions::ProposalCancel(
-                    from_slice::<ProposalVoteArgs>(ix_data).unwrap(),
+                    from_slice::<ProposalVoteArgs>(ix_data)
+                        .map_err(|_| SquadsV4Error::InvalidInstruction)?,
                 ))
             }
 
             "f33e869ce66af687" => {
                 // sighash(SIGHASH_GLOBAL_NAMESPACE, "proposal_reject")
                 Ok(SquadsInstructions::ProposalReject(
-                    from_slice::<ProposalVoteArgs>(ix_data).unwrap(),
+                    from_slice::<ProposalVoteArgs>(ix_data)
+                        .map_err(|_| SquadsV4Error::InvalidInstruction)?,
                 ))
             }
             "30fa4ea8d0e2dad3" => {
                 // sighash(SIGHASH_GLOBAL_NAMESPACE,vault_transaction_create
                 Ok(SquadsInstructions::VaultTransactionCreate(
-                    from_slice::<VaultTransactionCreateArgs>(ix_data).unwrap(),
+                    from_slice::<VaultTransactionCreateArgs>(ix_data)
+                        .map_err(|_| SquadsV4Error::InvalidInstruction)?,
                 ))
             }
             "c208a15799a419ab" => {

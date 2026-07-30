@@ -269,7 +269,7 @@ impl Encodable for LegacyTransaction {
 }
 
 pub struct ParsedLegacyTransaction {
-    pub(crate) nonce: u32,
+    pub(crate) nonce: String,
     pub(crate) gas_price: String,
     pub(crate) gas_limit: String,
     pub(crate) to: String,
@@ -282,8 +282,8 @@ pub struct ParsedLegacyTransaction {
 impl From<LegacyTransaction> for ParsedLegacyTransaction {
     fn from(value: LegacyTransaction) -> Self {
         Self {
-            nonce: value.nonce.as_u32(),
-            gas_price: normalize_price(value.gas_price.as_u64()),
+            nonce: value.nonce.to_string(),
+            gas_price: normalize_price(value.gas_price),
             gas_limit: value.gas_limit.to_string(),
             to: format!("0x{}", hex::encode(value.get_to())),
             value: normalize_value(value.get_value()),
@@ -337,6 +337,23 @@ mod tests {
     use super::*;
 
     extern crate std;
+
+    #[test]
+    fn test_parsed_legacy_transaction_preserves_large_nonce() {
+        let tx = LegacyTransaction {
+            nonce: U256::from(4_294_967_297_u64),
+            gas_price: U256::from(1),
+            gas_limit: U256::from(21_000),
+            action: TransactionAction::Call(H160::zero()),
+            value: U256::zero(),
+            input: vec![],
+            signature: None,
+        };
+
+        let parsed = ParsedLegacyTransaction::from(tx);
+        assert_eq!(parsed.nonce, "4294967297");
+    }
+
     #[test]
     fn test_transfer_erc20_legacy_transaction() {
         let tx = LegacyTransaction::new(

@@ -8,6 +8,7 @@
 #include "user_memory.h"
 #include "account_manager.h"
 #include "gui_chain.h"
+#include "gui_chain_components.h"
 
 static bool g_isMulti = false;
 static URParseResult *g_urResult = NULL;
@@ -57,6 +58,16 @@ static const CosmosChain_t g_cosmosChains[COSMOS_CHAINS_LEN] = {
 };
 
 static void ClearCosmosDetailCache(void);
+static cJSON *GetCosmosParsedDetailRoot(DisplayCosmosTx *tx);
+static lv_obj_t *CreateCosmosMessageTitle(lv_obj_t *parent, size_t index, lv_obj_t *lastView);
+static lv_obj_t *CreateCosmosJsonItem(lv_obj_t *parent, const char *key, const cJSON *value, lv_obj_t *lastView);
+static lv_obj_t *CreateCosmosJsonFields(lv_obj_t *parent, const cJSON *object, lv_obj_t *lastView,
+                                        bool overview, bool showMessageIndex);
+static lv_obj_t *CreateCosmosCommonFields(lv_obj_t *parent, const cJSON *common, lv_obj_t *lastView, bool overview);
+static lv_obj_t *CreateCosmosBlindSignView(lv_obj_t *parent, const cJSON *object, lv_obj_t *lastView);
+static lv_obj_t *CreateCosmosMemoView(lv_obj_t *parent, const cJSON *memo, lv_obj_t *lastView);
+static bool IsCosmosBlindSignMessage(const cJSON *object);
+static void InitCosmosTxContainer(lv_obj_t *parent);
 
 static inline void* GetCosmosUrData(void)
 {
@@ -167,7 +178,10 @@ void GuiGetCosmosTmpType(void *indata, void *param, uint32_t maxLen)
 {
     DisplayCosmosTx *tx = (DisplayCosmosTx *)param;
     if (strcmp(tx->overview->display_type, GuiGetCosmosTxTypeName(COSMOS_TX_UNKNOWN)) == 0) {
-        snprintf_s((char *)indata,  maxLen, "unknown");
+        cJSON *root = GetCosmosParsedDetailRoot(tx);
+        cJSON *kind = root == NULL ? NULL : cJSON_GetObjectItem(root, "kind");
+        const char *page = cJSON_IsArray(kind) && cJSON_GetArraySize(kind) > 0 ? "tx" : "unknown";
+        snprintf_s((char *)indata, maxLen, "%s", page);
     } else if (strcmp(tx->overview->display_type, GuiGetCosmosTxTypeName(COSMOS_MESSAGE)) == 0) {
         snprintf_s((char *)indata,  maxLen, "msg");
     } else {
@@ -209,6 +223,227 @@ static cJSON *GetCosmosParsedDetailRoot(DisplayCosmosTx *tx)
         g_cosmosLastCommon = cJSON_GetObjectItem(g_cosmosLastRoot, "common");
     }
     return g_cosmosLastRoot;
+}
+
+void GuiCosmosTxOverview(lv_obj_t *parent, void *totalData)
+{
+    DisplayCosmosTx *tx = (DisplayCosmosTx *)totalData;
+    InitCosmosTxContainer(parent);
+
+    cJSON *root = GetCosmosParsedDetailRoot(tx);
+    cJSON *kind = root == NULL ? NULL : cJSON_GetObjectItem(root, "kind");
+    cJSON *common = root == NULL ? NULL : cJSON_GetObjectItem(root, "common");
+    lv_obj_t *lastView = NULL;
+
+    if (cJSON_IsArray(kind)) {
+        int messageCount = cJSON_GetArraySize(kind);
+        for (int i = 0; i < messageCount; i++) {
+            cJSON *message = cJSON_GetArrayItem(kind, i);
+            if (!cJSON_IsObject(message)) {
+                continue;
+            }
+            if (messageCount > 1) {
+                lastView = CreateCosmosMessageTitle(parent, (size_t)i, lastView);
+            }
+            lastView = CreateCosmosJsonFields(parent, message, lastView, true, messageCount > 1);
+        }
+    }
+    lastView = CreateCosmosCommonFields(parent, common, lastView, true);
+    lv_obj_update_layout(parent);
+}
+
+void GuiCosmosTxDetails(lv_obj_t *parent, void *totalData)
+{
+    DisplayCosmosTx *tx = (DisplayCosmosTx *)totalData;
+    InitCosmosTxContainer(parent);
+
+    cJSON *root = GetCosmosParsedDetailRoot(tx);
+    cJSON *kind = root == NULL ? NULL : cJSON_GetObjectItem(root, "kind");
+    cJSON *common = root == NULL ? NULL : cJSON_GetObjectItem(root, "common");
+    lv_obj_t *lastView = NULL;
+
+    if (cJSON_IsArray(kind)) {
+        int messageCount = cJSON_GetArraySize(kind);
+        for (int i = 0; i < messageCount; i++) {
+            cJSON *message = cJSON_GetArrayItem(kind, i);
+            if (!cJSON_IsObject(message)) {
+                continue;
+            }
+            if (messageCount > 1) {
+                lastView = CreateCosmosMessageTitle(parent, (size_t)i, lastView);
+            }
+            lastView = CreateCosmosJsonFields(parent, message, lastView, false, messageCount > 1);
+        }
+    }
+    lastView = CreateCosmosCommonFields(parent, common, lastView, false);
+    lv_obj_update_layout(parent);
+}
+
+static void InitCosmosTxContainer(lv_obj_t *parent)
+{
+    lv_obj_t *tabChild = lv_obj_get_parent(parent);
+    if (tabChild != NULL) {
+        lv_obj_set_style_pad_all(tabChild, 0, LV_PART_MAIN);
+    }
+    lv_obj_set_size(parent, 408, 444);
+    lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(parent, LV_OBJ_FLAG_CLICKABLE);
+}
+
+static lv_obj_t *CreateCosmosMessageTitle(lv_obj_t *parent, size_t index, lv_obj_t *lastView)
+{
+    lv_obj_t *container = CreateContentContainer(parent, 408, 62);
+    if (lastView != NULL) {
+        lv_obj_align_to(container, lastView, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
+    }
+
+    char title[BUFFER_SIZE_32] = {0};
+    snprintf_s(title, sizeof(title), "%s %u", _("Message"), (unsigned int)(index + 1));
+
+    lv_obj_t *label = GuiCreateTextLabel(container, title);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 16);
+    lv_obj_set_style_text_color(label, ORANGE_COLOR, LV_PART_MAIN);
+    return container;
+}
+
+static lv_obj_t *CreateCosmosJsonItem(lv_obj_t *parent, const char *key, const cJSON *value, lv_obj_t *lastView)
+{
+    if (key == NULL || !cJSON_IsString(value) || value->valuestring == NULL || value->valuestring[0] == '\0') {
+        return lastView;
+    }
+    return CreateTransactionItemView(parent, _(key), value->valuestring, lastView);
+}
+
+static lv_obj_t *CreateCosmosJsonFields(lv_obj_t *parent, const cJSON *object, lv_obj_t *lastView,
+                                        bool overview, bool showMessageIndex)
+{
+    static const char *overviewKeys[] = {
+        "Value", "Method", "From", "To", "Validator", "Old Validator", "New Validator",
+        "Proposal", "Voted", "Voter", "Source Channel"
+    };
+
+    if (!cJSON_IsObject(object)) {
+        return lastView;
+    }
+    if (IsCosmosBlindSignMessage(object)) {
+        lastView = CreateCosmosBlindSignView(parent, object, lastView);
+        if (showMessageIndex) {
+            lastView = CreateCosmosJsonItem(parent, "Message Index",
+                                            cJSON_GetObjectItem(object, "Message Index"), lastView);
+        }
+        lastView = CreateCosmosJsonItem(parent, "Type URL",
+                                        cJSON_GetObjectItem(object, "Type URL"), lastView);
+        return CreateCosmosJsonItem(parent, "Data Digest",
+                                    cJSON_GetObjectItem(object, "Data Digest"), lastView);
+    }
+    if (overview) {
+        for (size_t i = 0; i < NUMBER_OF_ARRAYS(overviewKeys); i++) {
+            cJSON *value = cJSON_GetObjectItem(object, overviewKeys[i]);
+            lastView = CreateCosmosJsonItem(parent, overviewKeys[i], value, lastView);
+        }
+        return lastView;
+    }
+
+    for (cJSON *field = object->child; field != NULL; field = field->next) {
+        lastView = CreateCosmosJsonItem(parent, field->string, field, lastView);
+    }
+    return lastView;
+}
+
+static bool IsCosmosBlindSignMessage(const cJSON *object)
+{
+    cJSON *method = cJSON_IsObject(object) ? cJSON_GetObjectItem(object, "Method") : NULL;
+    return cJSON_IsString(method) && method->valuestring != NULL &&
+           strcmp(method->valuestring, "Blind Sign") == 0;
+}
+
+static lv_obj_t *CreateCosmosBlindSignView(lv_obj_t *parent, const cJSON *object, lv_obj_t *lastView)
+{
+    cJSON *warning = cJSON_GetObjectItem(object, "Warning");
+    const char *warningText = cJSON_IsString(warning) && warning->valuestring != NULL
+                              ? warning->valuestring
+                              : _("Unknown Data");
+    lv_obj_t *container = CreateContentContainer(parent, 408, 0);
+    if (lastView != NULL) {
+        lv_obj_align_to(container, lastView, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
+    }
+
+    lv_obj_t *title = GuiCreateTextLabel(container, _("Blind Sign"));
+    lv_obj_set_style_text_color(title, YELLOW_COLOR, LV_PART_MAIN);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 24, 16);
+
+    lv_obj_t *content = GuiCreateIllustrateLabel(container, warningText);
+    lv_obj_set_width(content, 360);
+    lv_label_set_long_mode(content, LV_LABEL_LONG_WRAP);
+    lv_obj_align(content, LV_ALIGN_TOP_LEFT, 24, 54);
+    lv_obj_update_layout(content);
+    lv_obj_set_height(container, 54 + lv_obj_get_height(content) + 16);
+    return container;
+}
+
+static lv_obj_t *CreateCosmosMemoView(lv_obj_t *parent, const cJSON *memo, lv_obj_t *lastView)
+{
+    if (!cJSON_IsString(memo) || memo->valuestring == NULL || memo->valuestring[0] == '\0') {
+        return lastView;
+    }
+
+    lv_obj_t *container = CreateContentContainer(parent, 408, 0);
+    if (lastView != NULL) {
+        lv_obj_align_to(container, lastView, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
+    }
+
+    lv_obj_t *title = GuiCreateIllustrateLabel(container, _("Memo"));
+    lv_obj_set_style_text_opa(title, LV_OPA_64, LV_PART_MAIN);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 24, 16);
+
+    lv_obj_t *textContainer = GuiCreateContainerWithParent(container, 360, 0);
+    lv_obj_set_style_bg_opa(textContainer, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_align(textContainer, LV_ALIGN_TOP_LEFT, 24, 54);
+
+    lv_obj_t *text = GuiCreateIllustrateLabel(textContainer, memo->valuestring);
+    lv_obj_set_width(text, 360);
+    lv_label_set_long_mode(text, LV_LABEL_LONG_WRAP);
+    lv_obj_align(text, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_update_layout(text);
+
+    uint16_t textHeight = lv_obj_get_height(text);
+    uint16_t visibleHeight = textHeight > 150 ? 150 : textHeight;
+    lv_obj_set_height(textContainer, visibleHeight);
+    if (textHeight > visibleHeight) {
+        lv_obj_add_flag(textContainer, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(textContainer, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_scroll_dir(textContainer, LV_DIR_VER);
+        lv_obj_set_scrollbar_mode(textContainer, LV_SCROLLBAR_MODE_OFF);
+    }
+    lv_obj_set_height(container, 54 + visibleHeight + 16);
+    return container;
+}
+
+static lv_obj_t *CreateCosmosCommonFields(lv_obj_t *parent, const cJSON *common, lv_obj_t *lastView, bool overview)
+{
+    static const char *detailKeys[] = {"Max Fee", "Gas Limit", "Network", "Chain ID"};
+    if (!cJSON_IsObject(common)) {
+        return lastView;
+    }
+    if (overview) {
+        lastView = CreateCosmosMemoView(parent, cJSON_GetObjectItem(common, "Memo"), lastView);
+        cJSON *network = cJSON_GetObjectItem(common, "Network");
+        lastView = CreateCosmosJsonItem(parent, "Network", network, lastView);
+        if (cJSON_IsString(network) && network->valuestring != NULL &&
+            strcmp(network->valuestring, "Unknown Network") == 0) {
+            lastView = CreateCosmosJsonItem(parent, "Chain ID",
+                                            cJSON_GetObjectItem(common, "Chain ID"), lastView);
+        }
+        return lastView;
+    }
+    for (size_t i = 0; i < 2; i++) {
+        lastView = CreateCosmosJsonItem(parent, detailKeys[i], cJSON_GetObjectItem(common, detailKeys[i]), lastView);
+    }
+    lastView = CreateCosmosMemoView(parent, cJSON_GetObjectItem(common, "Memo"), lastView);
+    for (size_t i = 2; i < NUMBER_OF_ARRAYS(detailKeys); i++) {
+        lastView = CreateCosmosJsonItem(parent, detailKeys[i], cJSON_GetObjectItem(common, detailKeys[i]), lastView);
+    }
+    return lastView;
 }
 
 void GetCosmosValue(void *indata, void *param, uint32_t maxLen)

@@ -445,6 +445,26 @@ static uint8_t buffer[100 * 1024];
 static char *qrcode[3000];
 static uint32_t qrcode_size;
 
+static bool store_qrcode_line(uint32_t index, const uint8_t *data, size_t length)
+{
+    if (index >= sizeof(qrcode) / sizeof(qrcode[0])) {
+        return false;
+    }
+    if (length > 0 && data[length - 1] == '\r') {
+        length--;
+    }
+    if (qrcode[index] != NULL) {
+        free(qrcode[index]);
+    }
+    qrcode[index] = malloc(length + 1);
+    if (qrcode[index] == NULL) {
+        return false;
+    }
+    memcpy(qrcode[index], data, length);
+    qrcode[index][length] = '\0';
+    return true;
+}
+
 char *FatfsFileRead(const char *path)
 {
     int32_t readBytes = 0;
@@ -526,29 +546,20 @@ int32_t prepare_qrcode()
 
     for (size_t i = 0; i < readBytes; i++) {
         if (buffer[i] == '\n') {
-            if (qrcode[lastQRIndex] != NULL) {
-                free(qrcode[lastQRIndex]);
+            if (!store_qrcode_line(lastQRIndex, buffer + lastIndex, i - lastIndex)) {
+                return -1;
             }
-            qrcode[lastQRIndex] = malloc(1024);
-            memset(qrcode[lastQRIndex], '\0', 1024);
-            memcpy(qrcode[lastQRIndex], buffer + lastIndex, i - lastIndex);
-            // printf("qrcode: %s\r\n", qrcode[lastQRIndex]);
             lastIndex = i + 1;
             lastQRIndex++;
         }
-        if (i == readBytes - 1) {
-            // printf("last char: %c\r\n", buffer[i]);
-            if (qrcode[lastQRIndex] != NULL) {
-                free(qrcode[lastQRIndex]);
-            }
-            qrcode[lastQRIndex] = malloc(1024);
-            memset(qrcode[lastQRIndex], '\0', 1024);
-            memcpy(qrcode[lastQRIndex], buffer + lastIndex, i - lastIndex + 1);
-            // printf("qrcode: %s\r\n", qrcode[lastQRIndex]);
-            qrcode_size = lastQRIndex + 1;
-        }
     }
-    // printf("read: %d\r\n", readBytes);
+    if (lastIndex < readBytes) {
+        if (!store_qrcode_line(lastQRIndex, buffer + lastIndex, readBytes - lastIndex)) {
+            return -1;
+        }
+        lastQRIndex++;
+    }
+    qrcode_size = lastQRIndex;
 
     return readBytes;
 }
@@ -637,9 +648,10 @@ int32_t read_qrcode()
 int32_t read_qrcode()
 {
     UrViewType_t viewType;
-    uint32_t readLen = prepare_qrcode();
-    if (readLen == 0)
-        return 0;
+    int32_t readLen = prepare_qrcode();
+    if (readLen <= 0) {
+        return readLen;
+    }
     int i = 0;
     int loopTime = 0;
 
@@ -679,6 +691,13 @@ int32_t read_qrcode()
             firstQrFlag = false;
             decoder = urResult->decoder;
         }
+    }
+    else
+    {
+        printf("error code: %d\r\n", urResult->error_code);
+        printf("error message: %s\r\n", urResult->error_message);
+        free_ur_parse_result(urResult);
+        return -1;
     }
 
     printf("qrcode_size: %d\r\n", qrcode_size);

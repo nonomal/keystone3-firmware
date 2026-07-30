@@ -8,6 +8,16 @@ pub const C_CHAIN_ADDRESS_LEN: usize = 20;
 pub const ASSET_ID_LEN: usize = 32;
 pub const ADDRESS_LEN: usize = 20;
 pub const NAVAX_TO_AVAX_RATIO: f64 = 1_000_000_000.0;
+pub const MAINNET_NETWORK_ID: u32 = 1;
+pub const FUJI_NETWORK_ID: u32 = 5;
+pub const MAINNET_AVAX_ASSET_ID: [u8; ASSET_ID_LEN] = [
+    33, 230, 115, 23, 203, 196, 190, 42, 235, 0, 103, 122, 214, 70, 39, 120, 168, 245, 34, 116,
+    185, 214, 5, 223, 37, 145, 178, 48, 39, 168, 125, 255,
+];
+pub const FUJI_AVAX_ASSET_ID: [u8; ASSET_ID_LEN] = [
+    61, 155, 218, 192, 237, 29, 118, 19, 48, 207, 104, 14, 253, 235, 26, 66, 21, 158, 179, 135,
+    214, 210, 149, 12, 150, 247, 210, 143, 97, 187, 226, 170,
+];
 pub const C_CHAIN_PREFIX: &str = "m/44'/60'/0'";
 pub const X_P_CHAIN_PREFIX: &str = "m/44'/9000'/0'";
 

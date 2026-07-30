@@ -7,8 +7,6 @@ static GetLabelDataLenFunc GuiAdaTextLenFuncGet(char *type);
 static GetLabelDataLenFunc GuiEthTextLenFuncGet(char *type);
 static GetLabelDataLenFunc GuiXrpTextLenFuncGet(char *type);
 static GetLabelDataLenFunc GuiStellarTextLenFuncGet(char *type);
-static GetLabelDataLenFunc GuiArTextLenFuncGet(char *type);
-static GetTableDataFunc GuiEthTableFuncGet(char *type);
 static GetTableDataFunc GuiAdaTabelFuncGet(char *type);
 static GetLabelDataFunc GuiTrxTextFuncGet(char *type);
 static GetLabelDataFunc GuiTrxPersonalMessageTextFuncGet(char *type);
@@ -18,12 +16,10 @@ static GetLabelDataLenFunc GuiSuiTextLenFuncGet(char *type);
 static GetLabelDataFunc GuiAptosTextFuncGet(char *type);
 static GetLabelDataLenFunc GuiAptosTextLenFuncGet(char *type);
 static GetLabelDataFunc GuiXrpTextFuncGet(char *type);
-static GetLabelDataFunc GuiArTextFuncGet(char *type);
 static GetLabelDataFunc GuiStellarTextFuncGet(char *type);
 static GetLabelDataFunc GuiSolMessageTextFuncGet(char *type);
 static GetLabelDataFunc GuiEthTypedDataTextFuncGet(char *type);
 static GetLabelDataFunc GuiEthPersonalMessageTextFuncGet(char *type);
-static GetLabelDataFunc GuiEthTextFuncGet(char *type);
 static GetContSizeFunc GetEthObjPos(char *type);
 static GetContSizeFunc GetTrxPersonalMessageObjPos(char *type);
 static GetContSizeFunc GetCosmosObjPos(char *type);
@@ -77,8 +73,12 @@ GetCustomContainerFunc GetOtherChainCustomFunc(char *funcName)
         return GuiShowSolTxOverview;
     } else if (!strcmp(funcName, "GuiShowSolTxDetail")) {
         return GuiShowSolTxDetail;
-    } else if (!strcmp(funcName, "GuiShowArweaveTxDetail")) {
-        return GuiShowArweaveTxDetail;
+    } else if (!strcmp(funcName, "GuiArTxOverview")) {
+        return GuiArTxOverview;
+    } else if (!strcmp(funcName, "GuiArTxDetails")) {
+        return GuiArTxDetails;
+    } else if (!strcmp(funcName, "GuiArMessageOverview")) {
+        return GuiArMessageOverview;
     } else if (!strcmp(funcName, "GetCatalystRewardsNotice")) {
         return GetCatalystRewardsNotice;
     } else if (!strcmp(funcName, "GuiStellarTxNotice")) {
@@ -93,6 +93,14 @@ GetCustomContainerFunc GetOtherChainCustomFunc(char *funcName)
         return GuiTonProofOverview;
     } else if (!strcmp(funcName, "GuiTonProofRawData")) {
         return GuiTonProofRawData;
+    } else if (!strcmp(funcName, "GuiEthTxOverview")) {
+        return GuiEthTxOverview;
+    } else if (!strcmp(funcName, "GuiEthTxDetails")) {
+        return GuiEthTxDetails;
+    } else if (!strcmp(funcName, "GuiCosmosTxOverview")) {
+        return GuiCosmosTxOverview;
+    } else if (!strcmp(funcName, "GuiCosmosTxDetails")) {
+        return GuiCosmosTxDetails;
     } else if (!strcmp(funcName, "GuiArDataItemOverview")) {
         return GuiArDataItemOverview;
     } else if (!strcmp(funcName, "GuiArDataItemDetail")) {
@@ -124,11 +132,7 @@ GetCustomContainerFunc GetOtherChainCustomFunc(char *funcName)
 
 lv_event_cb_t GuiOtherChainEventCbGet(char *type)
 {
-    if (!strcmp(type, "EthContractLearnMore")) {
-        return EthContractLearnMore;
-    } else if (!strcmp(type, "EthContractCheckRawData")) {
-        return EthContractCheckRawData;
-    } else if (!strcmp(type, "TrxCheckVault")) {
+    if (!strcmp(type, "TrxCheckVault")) {
         return TrxCheckVault;
     }
 
@@ -137,28 +141,12 @@ lv_event_cb_t GuiOtherChainEventCbGet(char *type)
 
 GetObjStateFunc GuiOtherChainStateFuncGet(char *type)
 {
-    if (!strcmp(type, "GetEthEnsExist")) {
-        return GetEthEnsExist;
-    } else if (!strcmp(type, "GetEthTypeDataHashExist")) {
+    if (!strcmp(type, "GetEthTypeDataHashExist")) {
         return GetEthTypeDataHashExist;
-    } else if (!strcmp(type, "GetToEthEnsExist")) {
-        return GetToEthEnsExist;
     } else if (!strcmp(type, "GetEthTypeDataChainExist")) {
         return GetEthTypeDataChainExist;
     } else if (!strcmp(type, "GetEthTypeDataVersionExist")) {
         return GetEthTypeDataVersionExist;
-    } else if (!strcmp(type, "GetEthContractDataExist")) {
-        return GetEthContractDataExist;
-    } else if (!strcmp(type, "GetEthContractDataNotExist")) {
-        return GetEthContractDataNotExist;
-    } else if (!strcmp(type, "GetEthInputDataExist")) {
-        return GetEthInputDataExist;
-    } else if (!strcmp(type, "EthInputExistContractNot")) {
-        return EthInputExistContractNot;
-    } else if (!strcmp(type, "GetEthFromAddressExist")) {
-        return GetEthFromAddressExist;
-    } else if (!strcmp(type, "GetEthFromAddressNotExist")) {
-        return GetEthFromAddressNotExist;
     } else if (!strcmp(type, "GetEthMessageFromExist")) {
         return GetEthMessageFromExist;
     } else if (!strcmp(type, "GetEthMessageFromNotExist")) {
@@ -220,8 +208,6 @@ GetObjStateFunc GuiOtherChainStateFuncGet(char *type)
 GetTableDataFunc GuiOtherChainTableFuncGet(char *type, GuiRemapViewType remapIndex)
 {
     switch (remapIndex) {
-    case REMAPVIEW_ETH:
-        return GuiEthTableFuncGet(type);
     case REMAPVIEW_ADA:
     case REMAPVIEW_ADA_SIGN_DATA:
     case REMAPVIEW_ADA_CATALYST:
@@ -234,8 +220,6 @@ GetTableDataFunc GuiOtherChainTableFuncGet(char *type, GuiRemapViewType remapInd
 GetLabelDataFunc GuiOtherChainTextFuncGet(char *type, GuiRemapViewType remapIndex)
 {
     switch (remapIndex) {
-    case REMAPVIEW_ETH:
-        return GuiEthTextFuncGet(type);
     case REMAPVIEW_ETH_PERSONAL_MESSAGE:
         return GuiEthPersonalMessageTextFuncGet(type);
     case REMAPVIEW_ETH_TYPEDDATA:
@@ -259,9 +243,6 @@ GetLabelDataFunc GuiOtherChainTextFuncGet(char *type, GuiRemapViewType remapInde
         return GuiAdaTextFuncGet(type);
     case REMAPVIEW_XRP:
         return GuiXrpTextFuncGet(type);
-    case REMAPVIEW_AR:
-    case REMAPVIEW_AR_MESSAGE:
-        return GuiArTextFuncGet(type);
     case REMAPVIEW_STELLAR:
     case REMAPVIEW_STELLAR_HASH:
         return GuiStellarTextFuncGet(type);
@@ -288,9 +269,6 @@ GetLabelDataLenFunc GuiOtherChainTextLenFuncGet(char *type, GuiRemapViewType rem
     case REMAPVIEW_ETH_TYPEDDATA:
     case REMAPVIEW_ETH:
         return GuiEthTextLenFuncGet(type);
-    case REMAPVIEW_AR:
-    case REMAPVIEW_AR_MESSAGE:
-        return GuiArTextLenFuncGet(type);
     case REMAPVIEW_STELLAR:
         return GuiStellarTextLenFuncGet(type);
     default:
@@ -381,8 +359,6 @@ static GetLabelDataLenFunc GuiEthTextLenFuncGet(char *type)
 {
     if (!strcmp(type, "GetEthTypedDataMessageLen")) {
         return GetEthTypedDataMessageLen;
-    } else if (!strcmp(type, "GetEthInputDataLen")) {
-        return GetEthInputDataLen;
     }
     return NULL;
 }
@@ -399,24 +375,6 @@ static GetLabelDataLenFunc GuiStellarTextLenFuncGet(char *type)
 {
     if (!strcmp(type, "GetStellarRawMessageLength")) {
         return GetStellarRawMessageLength;
-    }
-    return NULL;
-}
-
-static GetLabelDataLenFunc GuiArTextLenFuncGet(char *type)
-{
-    if (!strcmp(type, "GetArweaveRawMessageLength")) {
-        return GetArweaveRawMessageLength;
-    } else if (!strcmp(type, "GetArweaveMessageLength")) {
-        return GetArweaveMessageLength;
-    }
-    return NULL;
-}
-
-static GetTableDataFunc GuiEthTableFuncGet(char *type)
-{
-    if (!strcmp(type, "GetEthContractData")) {
-        return GetEthContractData;
     }
     return NULL;
 }
@@ -565,28 +523,6 @@ static GetLabelDataFunc GuiXrpTextFuncGet(char *type)
     return NULL;
 }
 
-static GetLabelDataFunc GuiArTextFuncGet(char *type)
-{
-    if (!strcmp(type, "GetArweaveValue")) {
-        return GetArweaveValue;
-    } else if (!strcmp(type, "GetArweaveFee")) {
-        return GetArweaveFee;
-    } else if (!strcmp(type, "GetArweaveFromAddress")) {
-        return GetArweaveFromAddress;
-    } else if (!strcmp(type, "GetArweaveToAddress")) {
-        return GetArweaveToAddress;
-    } else if (!strcmp(type, "GetArweaveValue")) {
-        return GetArweaveValue;
-    } else if (!strcmp(type, "GetArweaveMessageText")) {
-        return GetArweaveMessageText;
-    } else if (!strcmp(type, "GetArweaveRawMessage")) {
-        return GetArweaveRawMessage;
-    } else if (!strcmp(type, "GetArweaveMessageAddress")) {
-        return GetArweaveMessageAddress;
-    }
-    return NULL;
-}
-
 static GetLabelDataFunc GuiStellarTextFuncGet(char *type)
 {
     if (!strcmp(type, "GetStellarRawMessage")) {
@@ -650,58 +586,9 @@ static GetLabelDataFunc GuiEthTypedDataTextFuncGet(char *type)
     return NULL;
 }
 
-static GetLabelDataFunc GuiEthTextFuncGet(char *type)
-{
-    if (!strcmp(type, "GetEthValue")) {
-        return GetEthValue;
-    } else if (!strcmp(type, "GetEthTxFee")) {
-        return GetEthTxFee;
-    } else if (!strcmp(type, "GetEthGasPrice")) {
-        return GetEthGasPrice;
-    } else if (!strcmp(type, "GetEthGasLimit")) {
-        return GetEthGasLimit;
-    } else if (!strcmp(type, "GetEthNetWork")) {
-        return GetEthNetWork;
-    } else if (!strcmp(type, "GetEthMaxFee")) {
-        return GetEthMaxFee;
-    } else if (!strcmp(type, "GetEthMaxPriority")) {
-        return GetEthMaxPriority;
-    } else if (!strcmp(type, "GetEthMaxFeePrice")) {
-        return GetEthMaxFeePrice;
-    } else if (!strcmp(type, "GetEthMaxPriorityFeePrice")) {
-        return GetEthMaxPriorityFeePrice;
-    } else if (!strcmp(type, "GetEthGetFromAddress")) {
-        return GetEthGetFromAddress;
-    } else if (!strcmp(type, "GetEthGetToAddress")) {
-        return GetEthGetToAddress;
-    } else if (!strcmp(type, "GetEthGetDetailPageToAddress")) {
-        return GetEthGetDetailPageToAddress;
-    } else if (!strcmp(type, "GetTxnFeeDesc")) {
-        return GetTxnFeeDesc;
-    } else if (!strcmp(type, "GetEthEnsName")) {
-        return GetEthEnsName;
-    } else if (!strcmp(type, "GetToEthEnsName")) {
-        return GetToEthEnsName;
-    } else if (!strcmp(type, "GetEthMethodName")) {
-        return GetEthMethodName;
-    } else if (!strcmp(type, "GetEthTransactionData")) {
-        return GetEthTransactionData;
-    } else if (!strcmp(type, "GetEthContractName")) {
-        return GetEthContractName;
-    } else if (!strcmp(type, "GetEthInputData")) {
-        return GetEthInputData;
-    } else if (!strcmp(type, "GetEthNonce")) {
-        return GetEthNonce;
-    }
-
-    return NULL;
-}
-
 static GetContSizeFunc GetEthObjPos(char *type)
 {
-    if (!strcmp(type, "GetEthToLabelPos")) {
-        return GetEthToLabelPos;
-    } else if (!strcmp(type, "GetEthTypeDomainPos")) {
+    if (!strcmp(type, "GetEthTypeDomainPos")) {
         return GetEthTypeDomainPos;
     } else if (!strcmp(type, "GetEthMessagePos")) {
         return GetEthMessagePos;
@@ -761,11 +648,7 @@ static GetListLenFunc GetCosmosListLen(char *type)
 
 static GetContSizeFunc GetEthContainerSize(char *type)
 {
-    if (!strcmp(type, "GetEthToFromSize")) {
-        return GetEthToFromSize;
-    } else if (!strcmp(type, "GetEthContractDataSize")) {
-        return GetEthContractDataSize;
-    } else if (!strcmp(type, "GetEthTypeDomainSize")) {
+    if (!strcmp(type, "GetEthTypeDomainSize")) {
         return GetEthTypeDomainSize;
     }
     return NULL;
