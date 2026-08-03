@@ -191,7 +191,7 @@ static const lv_img_dsc_t *g_ThorWalletCoinArray[3] = {
 };
 
 static const lv_img_dsc_t *g_btcWalletCoinArray[] = {
-    &walletBluewallet, &walletSparrow, &walletZeus, &walletBabylon, &walletBull,
+    &walletBluewallet, &walletSparrow, &walletZeus, &walletBabylon, &walletBull, &walletLace,
 };
 
 static const lv_img_dsc_t *g_adaCoinArray[1] = {
@@ -217,7 +217,7 @@ WalletListItem_t g_walletListArray[] = {
     {WALLET_LIST_NUFI, &walletNufi, "NuFi", g_nufiCoinArray, 5, true, WALLET_FILTER_BTC | WALLET_FILTER_ETH | WALLET_FILTER_SOL | WALLET_FILTER_ADA},
     {WALLET_LIST_CORE, &walletCore, "Core Wallet", g_coreCoinArray, 3, true, WALLET_FILTER_BTC | WALLET_FILTER_ETH | WALLET_FILTER_OTHER},
     {WALLET_LIST_HELIUM, &walletHelium, "Helium Wallet", g_heliumCoinArray, 2, true, WALLET_FILTER_SOL},
-    {WALLET_LIST_BTC_WALLET, &coinBtc, "Bitcoin Wallets", g_btcWalletCoinArray, 5, true, WALLET_FILTER_BTC},
+    {WALLET_LIST_BTC_WALLET, &coinBtc, "Bitcoin Wallets", g_btcWalletCoinArray, NUMBER_OF_ARRAYS(g_btcWalletCoinArray), true, WALLET_FILTER_BTC},
     {WALLET_LIST_TONKEEPER, &walletTonkeeper, "Tonkeeper", g_tonKeeperCoinArray, 1, false, WALLET_FILTER_OTHER},
     {WALLET_LIST_RABBY, &walletRabby, "Rabby", g_ethWalletCoinArray, 4, true, WALLET_FILTER_ETH},
     {WALLET_LIST_NABOX, &walletNabox, "Nabox", g_naboxWalletCoinArray, 7, true, WALLET_FILTER_BTC | WALLET_FILTER_ETH | WALLET_FILTER_SOL | WALLET_FILTER_OTHER},
@@ -225,6 +225,7 @@ WalletListItem_t g_walletListArray[] = {
     {WALLET_LIST_ETERNL, &walletEternl, "Eternl", g_adaCoinArray, 1, true, WALLET_FILTER_ADA},
     {WALLET_LIST_VESPR, &walletVespr, "Vespr", g_adaCoinArray, 1, true, WALLET_FILTER_ADA},
     {WALLET_LIST_BEGIN, &walletBegin, "Begin", g_adaCoinArray, 1, true, WALLET_FILTER_ADA},
+    {WALLET_LIST_LACE, &walletLace, "Lace", g_adaCoinArray, 1, true, WALLET_FILTER_ADA},
     {WALLET_LIST_UNISAT, &walletUniSat, "UniSat", g_UniSatCoinArray, 5, true, WALLET_FILTER_BTC},
     {WALLET_LIST_SUIET, &walletSuiet, "Suiet", g_suiWalletCoinArray, 1, true, WALLET_FILTER_OTHER},
     {WALLET_LIST_IOTA, &walletIota, "IOTA Wallet", g_iotaCoinArray, 1, true, WALLET_FILTER_OTHER},
@@ -403,6 +404,7 @@ static bool IsAda(int walletIndex)
     case WALLET_LIST_GERO:
     case WALLET_LIST_TYPHON:
     case WALLET_LIST_BEGIN:
+    case WALLET_LIST_LACE:
         return true;
     default:
         return false;
@@ -465,6 +467,7 @@ static void OpenQRCodeHandler(lv_event_t *e)
     if (g_connectWalletTileView.walletIndex == WALLET_LIST_ETERNL ||
             g_connectWalletTileView.walletIndex == WALLET_LIST_TYPHON ||
             g_connectWalletTileView.walletIndex == WALLET_LIST_BEGIN ||
+            g_connectWalletTileView.walletIndex == WALLET_LIST_LACE ||
             g_connectWalletTileView.walletIndex == WALLET_LIST_MEDUSA ||
             g_connectWalletTileView.walletIndex == WALLET_LIST_GERO
        ) {
@@ -1013,6 +1016,7 @@ static void OpenMoreBtcWalletsHandler(lv_event_t *e)
         {.name = "ZEUS", .src = &walletZeus, .callBack = NULL, NULL},
         {.name = _("connect_babylon_title"), .src = &walletBabylon, .callBack = NULL, NULL},
         {.name = BULL_WALLET_TITLE, .src = &walletBull, .callBack = NULL, NULL},
+        {.name = "Lace", .src = &walletLace, .callBack = NULL, NULL},
     };
     g_noticeWindow = GuiCreateMoreInfoHintBox(NULL, NULL, moreInfoTable, NUMBER_OF_ARRAYS(moreInfoTable), true, &g_noticeWindow);
 
