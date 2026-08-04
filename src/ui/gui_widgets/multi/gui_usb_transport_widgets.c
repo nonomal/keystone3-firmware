@@ -65,8 +65,13 @@ static ResolveUrInfo_t CalcResolveUrPageInfo()
         info.buttonText = _("OK");
         break;
     default:
-        info.title = _("usb_transport_sign_unkown_error_title");
-        info.subTitle = _("usb_transport_sign_unkown_error_message");
+        if (g_param->error_message != NULL && g_param->error_message[0] != '\0') {
+            info.title = _("usb_transport_sign_failed_title");
+            info.subTitle = g_param->error_message;
+        } else {
+            info.title = _("usb_transport_sign_unkown_error_title");
+            info.subTitle = _("usb_transport_sign_unkown_error_message");
+        }
         info.buttonText = _("OK");
         break;
     }

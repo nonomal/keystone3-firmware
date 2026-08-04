@@ -1062,13 +1062,6 @@ static void GuiShowSolTxGeneralOverview(lv_obj_t *parent, PtrT_DisplaySolanaTxOv
     lv_obj_t *lastView = NULL;
 
     for (int i = 0; i < general->size; i++) {
-        if (0 == strcmp(general->data[i].program, "Unknown")) {
-            lastView = GuiCreateWarningCard(parent);
-            break;
-        }
-    }
-
-    for (int i = 0; i < general->size; i++) {
         char *program = general->data[i].program;
         char order[BUFFER_SIZE_16] = {0};
         snprintf_s(order, BUFFER_SIZE_16, "#%d", i + 1);
@@ -1127,6 +1120,48 @@ static void GuiShowSolTxGeneralOverview(lv_obj_t *parent, PtrT_DisplaySolanaTxOv
             lastView = CreateTransactionItemViewWithWidth(
                 parent, _("Destination"), general->data[i].destination, lastView, SOL_COMPONENT_WIDTH);
         }
+    }
+}
+
+static void GuiShowSolTxAdditionalUnknownPrograms(
+    lv_obj_t *parent,
+    PtrT_DisplaySolanaTxOverview overviewData)
+{
+    PtrT_VecFFI_PtrString programs = overviewData->additional_unknown_programs;
+    if (programs == NULL || programs->size == 0) {
+        return;
+    }
+
+    int32_t contentChildCount = lv_obj_get_child_cnt(parent);
+    lv_obj_t *warningCard = GuiCreateWarningCard(parent);
+    lv_obj_align(warningCard, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_update_layout(warningCard);
+    int32_t contentOffset = lv_obj_get_height(warningCard) + 16;
+
+    lv_obj_t *lastView = warningCard;
+    int32_t lastBottom = lv_obj_get_height(warningCard);
+    for (int32_t i = 0; i < contentChildCount; i++) {
+        lv_obj_t *child = lv_obj_get_child(parent, i);
+        lv_obj_set_y(child, lv_obj_get_y(child) + contentOffset);
+        int32_t childBottom = lv_obj_get_y(child) + lv_obj_get_height(child);
+        if (childBottom > lastBottom) {
+            lastBottom = childBottom;
+            lastView = child;
+        }
+    }
+
+    for (int i = 0; i < programs->size; i++) {
+        char order[BUFFER_SIZE_16] = {0};
+        snprintf_s(order, BUFFER_SIZE_16, "#%d", i + 1);
+        lv_obj_t *programCard = CreateTransactionOverviewCardWithWidth(
+            parent,
+            order,
+            "Unknown Program",
+            "Program Address",
+            programs->data[i],
+            SOL_COMPONENT_WIDTH);
+        lv_obj_align_to(programCard, lastView, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
+        lastView = programCard;
     }
 }
 static void GuiShowSolTxUnknownOverview(lv_obj_t *parent)
@@ -1563,7 +1598,9 @@ void GuiShowSolTxOverview(lv_obj_t *parent, void *totalData)
         GuiShowJupiterV6SwapOverview(parent, overviewData);
     } else {
         GuiShowSolTxInstructionsOverview(parent, overviewData);
+        return;
     }
+    GuiShowSolTxAdditionalUnknownPrograms(parent, overviewData);
 }
 
 void GuiShowSolTxDetail(lv_obj_t *parent, void *totalData)

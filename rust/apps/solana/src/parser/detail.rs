@@ -29,6 +29,20 @@ pub struct ProgramDetailSystemTransfer {
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
+pub struct ProgramDetailComputeBudget {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub compute_unit_limit: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub compute_unit_price_micro_lamports: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub heap_frame_bytes: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub loaded_accounts_data_size_limit: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub additional_fee_lamports: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ProgramDetailSystemTransferWithSeed {
     pub from: String,
     pub to: String,
@@ -1101,6 +1115,8 @@ pub struct JupiterV6SharedAccountsExactOutRouteDetail {
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum ProgramDetail {
+    // compute budget
+    ComputeBudget(ProgramDetailComputeBudget),
     // system
     SystemTransfer(ProgramDetailSystemTransfer),
     SystemTransferWithSeed(ProgramDetailSystemTransferWithSeed),
@@ -1236,6 +1252,7 @@ mod tests {
     #[test]
     fn serializes_representative_program_details() {
         let details = vec![
+            ProgramDetail::ComputeBudget(ProgramDetailComputeBudget::default()),
             ProgramDetail::SystemTransfer(ProgramDetailSystemTransfer::default()),
             ProgramDetail::SystemTransferWithSeed(ProgramDetailSystemTransferWithSeed::default()),
             ProgramDetail::SystemCreateAccount(ProgramDetailSystemCreateAccount::default()),
