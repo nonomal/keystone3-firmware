@@ -1,11 +1,14 @@
 use alloc::string::{String, ToString};
 
+use alloc::vec::Vec;
+
 use crate::parser::overview::SolanaOverview;
 
 #[derive(Clone, Debug)]
 pub struct ParsedSolanaTx {
     pub display_type: SolanaTxDisplayType,
     pub overview: SolanaOverview,
+    pub unknown_programs: Vec<String>,
     pub detail: String,
     pub network: String,
 }

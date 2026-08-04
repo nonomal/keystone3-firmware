@@ -58,10 +58,12 @@ impl ParsedSolanaTx {
         let raw_details = message.to_program_details()?;
         let display_type = Self::detect_display_type(&raw_details);
         let parsed_overview = Self::build_overview(&display_type, &raw_details)?;
+        let unknown_programs = Self::collect_additional_unknown_programs(&raw_details);
         let parsed_detail = Self::build_detail(&display_type, &raw_details, &message)?;
         Ok(Self {
             display_type,
             overview: parsed_overview,
+            unknown_programs,
             detail: parsed_detail,
             network: "Solana Mainnet".to_string(),
         })
@@ -75,16 +77,20 @@ impl ParsedSolanaTx {
         if unknown_count == details.len() {
             return SolanaTxDisplayType::Unknown;
         }
-        if unknown_count > 0 {
-            return SolanaTxDisplayType::General;
-        }
+        let primary_details = details
+            .iter()
+            .filter(|detail| {
+                !Self::is_unknown_detail(&detail.common)
+                    && !Self::is_compute_budget_detail(&detail.common)
+            })
+            .collect::<Vec<_>>();
 
         let squads = details
             .iter()
             .filter(|d| Self::is_sqauds_v4_detail(&d.common))
             .collect::<Vec<&SolanaDetail>>();
         if !squads.is_empty()
-            && details.iter().all(|detail| {
+            && primary_details.iter().all(|detail| {
                 Self::is_sqauds_v4_detail(&detail.common)
                     || Self::is_system_transfer_detail(&detail.common)
             })
@@ -96,7 +102,7 @@ impl ParsedSolanaTx {
             .iter()
             .filter(|d| Self::is_jupiter_v6_detail(&d.common))
             .collect::<Vec<&SolanaDetail>>();
-        if jupiter.len() == 1 && details.len() == 1 {
+        if jupiter.len() == 1 && primary_details.len() == 1 {
             return SolanaTxDisplayType::JupiterV6;
         }
 
@@ -104,7 +110,7 @@ impl ParsedSolanaTx {
             .iter()
             .filter(|d| Self::is_system_transfer_detail(&d.common))
             .collect::<Vec<&SolanaDetail>>();
-        if transfer.len() == 1 && details.len() == 1 {
+        if transfer.len() == 1 && primary_details.len() == 1 {
             return SolanaTxDisplayType::Transfer;
         }
         // if contains token transfer check
@@ -112,7 +118,7 @@ impl ParsedSolanaTx {
             .iter()
             .filter(|d| Self::is_token_transfer_checked_detail(&d.common))
             .collect::<Vec<&SolanaDetail>>();
-        if token_transfer.len() == 1 && details.len() == 1 {
+        if token_transfer.len() == 1 && primary_details.len() == 1 {
             return SolanaTxDisplayType::TokenTransfer;
         }
 
@@ -120,7 +126,7 @@ impl ParsedSolanaTx {
             .iter()
             .filter(|d| Self::is_vote_detail(&d.common))
             .collect::<Vec<&SolanaDetail>>();
-        if vote.len() == 1 && details.len() == 1 {
+        if vote.len() == 1 && primary_details.len() == 1 {
             return SolanaTxDisplayType::Vote;
         }
         SolanaTxDisplayType::General
@@ -140,6 +146,10 @@ impl ParsedSolanaTx {
 
     fn is_unknown_detail(common: &CommonDetail) -> bool {
         common.program.eq("Unknown") && common.method.is_empty()
+    }
+
+    fn is_compute_budget_detail(common: &CommonDetail) -> bool {
+        common.program.eq("ComputeBudget")
     }
 
     fn is_instructions_detail(common: &CommonDetail) -> bool {
@@ -451,6 +461,9 @@ impl ParsedSolanaTx {
     fn build_general_overview(details: &[SolanaDetail]) -> Result<SolanaOverview> {
         let mut overview = Vec::new();
         for d in details {
+            if Self::is_unknown_detail(&d.common) {
+                continue;
+            }
             let mut item = ProgramOverviewGeneral {
                 program: d.common.program.to_string(),
                 method: d.common.method.to_string(),
@@ -941,6 +954,29 @@ impl ParsedSolanaTx {
         }))
     }
 
+    fn collect_additional_unknown_programs(details: &[SolanaDetail]) -> Vec<String> {
+        if details
+            .iter()
+            .all(|detail| Self::is_unknown_detail(&detail.common))
+        {
+            return Vec::new();
+        }
+        details
+            .iter()
+            .filter_map(|detail| {
+                if !Self::is_unknown_detail(&detail.common) {
+                    return None;
+                }
+                match &detail.kind {
+                    ProgramDetail::Instruction(value) => Some(value.program_account.clone()),
+                    ProgramDetail::Unknown(value) => Some(value.program_account.clone()),
+                    ProgramDetail::RawUnknown(value) => Some(value.program_account.clone()),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
     fn build_overview(
         display_type: &SolanaTxDisplayType,
         details: &[SolanaDetail],
@@ -999,7 +1035,15 @@ mod tests {
                 detail("System", "Transfer"),
                 detail("Unknown", "")
             ]),
-            SolanaTxDisplayType::General
+            SolanaTxDisplayType::Transfer
+        ));
+        assert!(matches!(
+            ParsedSolanaTx::detect_display_type(&[
+                detail("ComputeBudget", "SetComputeUnitLimit"),
+                detail("ComputeBudget", "SetComputeUnitPrice"),
+                detail("JupiterV6", "SharedAccountsRoute")
+            ]),
+            SolanaTxDisplayType::JupiterV6
         ));
         for (program, method, expected) in [
             ("System", "Transfer", SolanaTxDisplayType::Transfer),
@@ -1269,15 +1313,13 @@ mod tests {
         let data = "0200050a06852df21778a462ea79aae81500eae98a935dcca05f8b899ca8b41021a79980acc933a10d87058ad3131361cd345fe95eb7598ad52d972ee559f1ea3f8deb452bb2df65fdf1ad0514f549457e4338bb71e6885354aa5ed87969ef14f5fc736772295dfa0330919867f6f90f2e334d1a56a2203ec3d4086151aab0171ca13c74b626da01ca1cb62be1bbbf9927dd0de251964d351736fd36100bb0e06f728b4100000000000000000000000000000000000000000000000000000000000000008c97258f4e2489f1bb3d1029148e0d830b5a1399daff1084048e7bd8dbe9f8590b7065b1e3d17c45389d527f6b04c3cd58b86c731aa0fdb549b6d1bc03f8294606a7d517192c5c51218cc94c3d4af17f58daee089ba1fd44e3dbd98a0000000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a92865a919afcfd4d57cf8f69e11990c98a55e4cc4389ba43c7d32184ca652adb406050200013400000000604d160000000000520000000000000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a90902010843000006852df21778a462ea79aae81500eae98a935dcca05f8b899ca8b41021a799800106852df21778a462ea79aae81500eae98a935dcca05f8b899ca8b41021a799800707030100000005087b0012000000536e65616b65722023313830333539303435000000003200000068747470733a2f2f6170692e737465706e2e636f6d2f72756e2f6e66746a736f6e2f3130332f3130363036313531353732319001010100000006852df21778a462ea79aae81500eae98a935dcca05f8b899ca8b41021a799800164010607000400010509080009030104000907010000000000000007090201000000030905080a0a010000000000000000";
         let transaction = Vec::from_hex(data).unwrap();
         let parsed = ParsedSolanaTx::build(&transaction).unwrap();
+        assert_eq!(3, parsed.unknown_programs.len());
         match parsed.overview {
             SolanaOverview::General(overview) => {
                 let expected = [
                     ("System", "CreateAccount"),
                     ("Token", "InitializeMint"),
-                    ("Unknown", ""),
-                    ("Unknown", ""),
                     ("Token", "MintTo"),
-                    ("Unknown", ""),
                 ];
                 assert_eq!(expected.len(), overview.len());
                 for (item, (program, method)) in overview.iter().zip(expected) {
@@ -1485,13 +1527,13 @@ mod tests {
         let data = "0301070faa30697d8ea2d14ce506c401ad5f1bd33476ebcb8a8b5cea89fa0aafb7c04f3925070f12913aa23553bfaf08f0a6f293aadb24dd66711db239c9b0ccca751b05dcc3a6c16cb67f59d67085e174cd7469f3e00b99a63d6c8d95337096f9e8437d8c17a1e64eba64bb7238d33b21461db8824508c879f91199d9eff9309ff63952baf04e4356057aaea057a6d744e1a0dbb99091448d6c2807114f0a016c9f2c39df8b1e991b87277d51b2ee23b63496ff1a54ab30e61eb4c4572e52fb99af9421e636e5095d76cede0e72ff2a024a07652d423fb7f3978a4663a278d13e1c1ba10deb821d34b39060c73598d3dd86ecf853df3b2f38b02991ad2ccfa51306e01600000000000000000000000000000000000000000000000000000000000000003f5877e18f96dea58c638a21d2be860ba96f0e21d1d84c6a94dba44e2be81f0e494500f4fdcbc9ad22814e250c0d6763266f6ca9169e12662f477601991e1a36be49a1eeb81bf889c158fd8b7496ff9141d4aa433eae3948d0d8488f78951b78069b8857feab8184fb687f634618c035dac439dc1aeb3b5598a0f0000000000106a7d517192c5c51218cc94c3d4af17f58daee089ba1fd44e3dbd98a0000000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a954c495b382bac905bb70f97bc252b2ee3b796b2836a3287ed5787c70eb2484120608020001340000000030266d0500000000a50000000000000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a90e04010c000d01010e03010200090440084e05000000000b0a090a020106030504070e110140084e05000000005d4d3700000000000e02010001050e030100000109";
         let transaction = Vec::from_hex(data).unwrap();
         let parsed = ParsedSolanaTx::build(&transaction).unwrap();
+        assert_eq!(1, parsed.unknown_programs.len());
         match parsed.overview {
             SolanaOverview::General(overview) => {
                 let expected = [
                     ("System", "CreateAccount"),
                     ("Token", "InitializeAccount"),
                     ("Token", "Approve"),
-                    ("Unknown", ""),
                     ("Token", "Revoke"),
                     ("Token", "CloseAccount"),
                 ];
@@ -1574,30 +1616,16 @@ mod tests {
         let parsed = ParsedSolanaTx::build(&transaction).unwrap();
         let detail_tx = parsed.detail;
         let parsed_detail: Value = serde_json::from_str(detail_tx.as_str()).unwrap();
-        let expect_data = json!({
-          "accounts": [
-            "NjordRPSzFs8XQUKMjGrhPcmGo9yfC9HP3VHmh8xZpZ",
-            "ComputeBudget111111111111111111111111111111",
-            "YmirFH6wUrtUMUmfRPZE7TcnszDw689YNWYrMgyB55N"
-          ],
-          "block_hash": "EBkkMFBA3ArcDiCkQtFyP7omptVXKoK23joaJoDUDqTF",
-          "header": {
-            "num_readonly_signed_accounts": 0,
-            "num_readonly_unsigned_accounts": 2,
-            "num_required_signatures": 1
-          },
-          "instructions": [
+        let expect_data = json!([
             {
-              "accounts": [],
-              "data": "Hg27aP",
-              "program": "Unknown",
-              "program_account": "ComputeBudget111111111111111111111111111111"
+              "compute_unit_limit": "542092",
+              "method": "SetComputeUnitLimit",
+              "program": "ComputeBudget"
             },
             {
-              "accounts": [],
-              "data": "3Ju5f2HYNk7Z",
-              "program": "Unknown",
-              "program_account": "ComputeBudget111111111111111111111111111111"
+              "compute_unit_price_micro_lamports": "99872",
+              "method": "SetComputeUnitPrice",
+              "program": "ComputeBudget"
             },
             {
               "accounts": [
@@ -1645,8 +1673,7 @@ mod tests {
               "program": "Unknown",
               "program_account": "YmirFH6wUrtUMUmfRPZE7TcnszDw689YNWYrMgyB55N"
             }
-          ]
-        });
+        ]);
         assert_eq!(expect_data, parsed_detail);
     }
 

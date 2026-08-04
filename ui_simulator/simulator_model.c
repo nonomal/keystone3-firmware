@@ -205,6 +205,11 @@ uint16_t GetCurrentUSParsingRequestID()
 void HandleURResultViaUSBFunc(const void *data, uint32_t data_len, uint16_t requestID, StatusEnum status)
 {
 }
+
+void HandleURResultViaUSBAsyncFunc(const void *data, uint32_t data_len, uint16_t requestID, StatusEnum status)
+{
+    HandleURResultViaUSBFunc(data, data_len, requestID, status);
+}
 #endif
 
 uint32_t GetBatteryMilliVolt(void)

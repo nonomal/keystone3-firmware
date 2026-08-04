@@ -229,6 +229,8 @@ pub struct DisplaySolanaTxOverview {
     pub general: PtrT<VecFFI<DisplaySolanaTxOverviewGeneral>>,
     // instructions
     pub unknown_instructions: PtrT<DisplaySolanaTxOverviewUnknownInstructions>,
+    // Unknown programs appended after a successfully parsed primary overview.
+    pub additional_unknown_programs: PtrT<VecFFI<PtrString>>,
 
     // squads_v4
     pub squads_multisig_create: PtrT<DisplaySolanaTxOverviewSquadsV4MultisigCreate>,
@@ -323,6 +325,7 @@ impl Default for DisplaySolanaTxOverview {
             vote_account: null_mut(),
             general: null_mut(),
             unknown_instructions: null_mut(),
+            additional_unknown_programs: null_mut(),
             squads_multisig_create: null_mut(),
             squads_proposal: null_mut(),
             spl_token_transfer: null_mut(),
@@ -367,6 +370,11 @@ impl Free for DisplaySolanaTxOverview {
             let x = Box::from_raw(self.unknown_instructions);
             x.free();
         }
+        if !self.additional_unknown_programs.is_null() {
+            let value = Box::from_raw(self.additional_unknown_programs);
+            let programs = Vec::from_raw_parts(value.data, value.size, value.cap);
+            programs.iter().for_each(|program| free_str_ptr!(*program));
+        }
         if !self.squads_multisig_create.is_null() {
             let x = Box::from_raw(self.squads_multisig_create);
             x.free();
@@ -388,9 +396,20 @@ impl Free for DisplaySolanaTxOverview {
 
 impl From<ParsedSolanaTx> for DisplaySolanaTx {
     fn from(value: ParsedSolanaTx) -> Self {
+        let mut overview = DisplaySolanaTxOverview::from(&value);
+        if !value.unknown_programs.is_empty() {
+            overview.additional_unknown_programs = VecFFI::from(
+                value
+                    .unknown_programs
+                    .iter()
+                    .map(|program| convert_c_char(program.to_string()))
+                    .collect_vec(),
+            )
+            .c_ptr();
+        }
         DisplaySolanaTx {
             network: convert_c_char(value.network.to_string()),
-            overview: DisplaySolanaTxOverview::from(&value).c_ptr(),
+            overview: overview.c_ptr(),
             detail: convert_c_char(value.detail),
         }
     }
