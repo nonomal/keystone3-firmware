@@ -34,6 +34,7 @@ static void GuiScanNavBarInit();
 static void GuiSetScanCorner(void);
 static void ThrowError(int32_t errorCode);
 static void GuiScanStart();
+static void GuiScanResumeAfterError();
 
 #ifdef BTC_ONLY
 static lv_obj_t *g_noticeWindow;
@@ -106,7 +107,7 @@ void GuiScanResult(bool result, void *param)
 #ifdef BTC_ONLY
         if (g_viewTypeFilter[0] != 0xFF) {
             if (!IsViewTypeSupported(g_qrcodeViewType, g_viewTypeFilter, NUMBER_OF_ARRAYS(g_viewTypeFilter))) {
-                g_scanErrorHintBox = GuiCreateErrorCodeWindow(ERR_MULTISIG_WALLET_CONFIG_INVALID, &g_scanErrorHintBox, GuiScanStart);
+                g_scanErrorHintBox = GuiCreateErrorCodeWindow(ERR_MULTISIG_WALLET_CONFIG_INVALID, &g_scanErrorHintBox, GuiScanResumeAfterError);
                 return;
             }
         }
@@ -222,7 +223,7 @@ void GuiTransactionCheckFailed(PtrT_TransactionCheckResult result)
     case BitcoinWalletTypeError:
     case MasterFingerprintMismatch:
     case UnsupportedTransaction:
-        GuiCreateRustErrorWindow(result->error_code, result->error_message, NULL, GuiScanStart);
+        GuiCreateRustErrorWindow(result->error_code, result->error_message, NULL, GuiScanResumeAfterError);
         break;
     default:
         ThrowError(ERR_INVALID_QRCODE);
@@ -289,11 +290,18 @@ static void GuiSetScanCorner(void)
 static void ThrowError(int32_t errorCode)
 {
     GuiSetScanCorner();
-    g_scanErrorHintBox = GuiCreateErrorCodeWindow(errorCode, &g_scanErrorHintBox, GuiScanStart);
+    g_scanErrorHintBox = GuiCreateErrorCodeWindow(errorCode, &g_scanErrorHintBox, GuiScanResumeAfterError);
 }
 
 static void GuiScanStart()
 {
     GuiSetScanCorner();
     GuiModeControlQrDecode(true);
+}
+
+static void GuiScanResumeAfterError()
+{
+#ifndef COMPILE_SIMULATOR
+    GuiScanStart();
+#endif
 }

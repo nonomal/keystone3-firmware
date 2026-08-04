@@ -54,7 +54,7 @@ use ur_registry::pb::protobuf_parser::{parse_protobuf, unzip};
 use ur_registry::pb::protoc;
 use ur_registry::pb::protoc::Base;
 #[cfg(feature = "solana")]
-use ur_registry::solana::sol_sign_request::{SignType as SolanaSignType, SolSignRequest};
+use ur_registry::solana::sol_sign_request::SolSignRequest;
 #[cfg(feature = "stellar")]
 use ur_registry::stellar::stellar_sign_request::{SignType as StellarSignType, StellarSignRequest};
 #[cfg(feature = "sui")]
@@ -378,17 +378,10 @@ impl InferViewType for BtcSignRequest {
 #[cfg(feature = "solana")]
 impl InferViewType for SolSignRequest {
     fn infer(&self) -> Result<ViewType, URError> {
-        match self.get_sign_type() {
-            SolanaSignType::Transaction => Ok(ViewType::SolanaTx),
-            SolanaSignType::Message => {
-                let sign_data = self.get_sign_data();
-                if app_solana::validate_tx(&mut sign_data.clone())
-                    || app_solana::has_tx_prefix(&mut sign_data.clone())
-                {
-                    return Ok(ViewType::SolanaTx);
-                }
-                Ok(ViewType::SolanaMessage)
-            }
+        match app_solana::classify_payload(&self.get_sign_data()) {
+            app_solana::SolanaPayloadType::Transaction
+            | app_solana::SolanaPayloadType::MalformedTransaction => Ok(ViewType::SolanaTx),
+            app_solana::SolanaPayloadType::Message => Ok(ViewType::SolanaMessage),
         }
     }
 }

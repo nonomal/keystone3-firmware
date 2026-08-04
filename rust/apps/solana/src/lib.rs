@@ -36,6 +36,33 @@ pub mod utils;
 
 const OFFCHAIN_MESSAGE_DOMAIN: &[u8; 16] = b"\xffsolana offchain";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SolanaPayloadType {
+    Transaction,
+    Message,
+    MalformedTransaction,
+}
+
+pub fn classify_payload(data: &[u8]) -> SolanaPayloadType {
+    let is_complete_transaction = {
+        let mut candidate = data.to_vec();
+        message::Message::read_exact(&mut candidate).is_ok()
+    };
+    if is_complete_transaction {
+        return SolanaPayloadType::Transaction;
+    }
+
+    let has_transaction_prefix = {
+        let mut candidate = data.to_vec();
+        message::Message::has_valid_prefix(&mut candidate)
+    };
+    if has_transaction_prefix {
+        SolanaPayloadType::MalformedTransaction
+    } else {
+        SolanaPayloadType::Message
+    }
+}
+
 fn parse_offchain_message_v0(data: &[u8]) -> Option<&str> {
     const PREAMBLE_LEN: usize = 20;
     const RESTRICTED_ASCII: u8 = 0;
@@ -183,6 +210,31 @@ mod tests {
         let parsed = parse_message(data.clone(), &String::new()).unwrap();
         assert!(parsed.utf8_message.is_empty());
         assert_eq!(hex::encode(data), parsed.raw_message);
+    }
+
+    #[test]
+    fn classifies_payload_by_content_instead_of_external_sign_type() {
+        let transaction = hex::decode("010002041a93fffb26ce645adeae58f0f414c320bcec30ce12a66bd263a91ec9b3958ff46f345144d352e4190c2dec43e1d3e0296a49bdfc2594eed9d8a5902e22d0af8b00000000000000000000000000000000000000000000000000000000000000000306466fe5211732ffecadba72c39be7bc8ce5bbc5f7126b2c439b3a40000000f70a9d4448ef435c5beab6cbc4211e00ddb4b9ad84886385f8b7ccfb9d9e7ca40303000903d8d600000000000003000502400d0300020200010c020000008096980000000000").unwrap();
+        assert_eq!(
+            SolanaPayloadType::Transaction,
+            classify_payload(&transaction)
+        );
+
+        let mut transaction_with_suffix = transaction;
+        transaction_with_suffix.push(0xaa);
+        assert_eq!(
+            SolanaPayloadType::MalformedTransaction,
+            classify_payload(&transaction_with_suffix)
+        );
+
+        assert_eq!(
+            SolanaPayloadType::Message,
+            classify_payload(b"Sign in to this application")
+        );
+        assert_eq!(
+            SolanaPayloadType::Message,
+            classify_payload(b"\xffsolana offchain\x00\x01\x04\x00test")
+        );
     }
 
     #[test]

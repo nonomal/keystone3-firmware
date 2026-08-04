@@ -28,6 +28,7 @@ typedef struct {
     size_t page_count;
     bool utf8;
     lv_obj_t *viewport;
+    lv_obj_t *warning;
     lv_obj_t *label;
     lv_obj_t *page_label;
     lv_obj_t *prev;
@@ -270,6 +271,17 @@ static void SolMessagePagerRefresh(SolMessagePager_t *pager)
     }
     page_text[length] = '\0';
 
+    lv_coord_t label_y = 0;
+    if (pager->warning != NULL) {
+        if (pager->page == 0) {
+            lv_obj_clear_flag(pager->warning, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_update_layout(pager->warning);
+            label_y = lv_obj_get_height(pager->warning) + 16;
+        } else {
+            lv_obj_add_flag(pager->warning, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    lv_obj_set_y(pager->label, label_y);
     lv_label_set_text(pager->label, page_text);
     lv_obj_set_height(pager->label, LV_SIZE_CONTENT);
     lv_obj_update_layout(pager->viewport);
@@ -325,10 +337,33 @@ static lv_obj_t *SolMessagePagerButton(lv_obj_t *parent, const char *text)
     return button;
 }
 
+static lv_obj_t *SolMessageRiskWarning(lv_obj_t *parent)
+{
+    lv_obj_t *warning = lv_obj_create(parent);
+    lv_obj_set_width(warning, 360);
+    lv_obj_set_height(warning, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(warning, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(warning, 8, LV_PART_MAIN);
+    lv_obj_set_style_border_width(warning, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(warning, 8, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(warning, lv_color_hex(0xF55831), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(warning, 48, LV_PART_MAIN);
+    lv_obj_set_flex_flow(warning, LV_FLEX_FLOW_COLUMN);
+
+    lv_obj_t *title = GuiCreateTextLabel(warning, _("solana_blind_sign_title"));
+    lv_obj_set_width(title, 328);
+    lv_obj_set_style_text_color(title, lv_color_hex(0xF55831), LV_PART_MAIN);
+
+    lv_obj_t *content = GuiCreateIllustrateLabel(
+        warning, _("solana_unparsed_message_warning"));
+    lv_obj_set_width(content, 328);
+    lv_label_set_long_mode(content, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_color(content, WHITE_COLOR, LV_PART_MAIN);
+    return warning;
+}
+
 void GuiShowSolMessagePaged(lv_obj_t *parent, void *param, bool raw)
 {
-    static const char raw_notice[] =
-        "\n\nUnparsed data. Verify it in the software wallet.";
     DisplaySolanaMessage *message = (DisplaySolanaMessage *)param;
     const char *text = raw ? message->raw_message : message->utf8_message;
     if (text == NULL) {
@@ -338,7 +373,7 @@ void GuiShowSolMessagePaged(lv_obj_t *parent, void *param, bool raw)
     SolMessagePager_t *pager = SRAM_MALLOC(sizeof(SolMessagePager_t));
     memset(pager, 0, sizeof(SolMessagePager_t));
     pager->text = text;
-    pager->suffix = raw ? raw_notice : "";
+    pager->suffix = "";
     pager->text_len = strlen(pager->text);
     pager->suffix_len = strlen(pager->suffix);
     pager->utf8 = !raw;
@@ -361,6 +396,11 @@ void GuiShowSolMessagePaged(lv_obj_t *parent, void *param, bool raw)
     lv_obj_set_scrollbar_mode(pager->viewport, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_scroll_dir(pager->viewport, LV_DIR_VER);
     lv_obj_add_flag(pager->viewport, LV_OBJ_FLAG_SCROLLABLE);
+
+    if (raw) {
+        pager->warning = SolMessageRiskWarning(pager->viewport);
+        lv_obj_set_pos(pager->warning, 0, 0);
+    }
 
     pager->label = lv_label_create(pager->viewport);
     lv_obj_set_pos(pager->label, 0, 0);
