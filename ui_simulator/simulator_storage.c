@@ -295,7 +295,10 @@ int32_t SimulatorLoadAccountSecret(uint8_t accountIndex, AccountSecret_t *accoun
     cJSON *passwordJson = cJSON_GetObjectItem(rootJson, "password");
     if (passwordJson == NULL || strcmp(passwordJson->valuestring, password) != 0) {
         cJSON_Delete(rootJson);
-        return ret;
+        // Password mismatch must NOT be reported as success, otherwise the
+        // duplicate-PIN check (CheckPasswordExisted -> VerifyAccountPassword)
+        // always treats any new PIN as a duplicate of an existing account.
+        return ERR_KEYSTORE_PASSWORD_ERR;
     }
     GetJsonArrayData(rootJson, accountSecret->entropy, ENTROPY_MAX_LEN, "entropy");
     GetJsonArrayData(rootJson, accountSecret->seed, SEED_LEN, "seed");

@@ -10,7 +10,7 @@ use app_solana::errors::SolanaError;
 use app_solana::parse_message;
 use cty::c_char;
 use structs::{DisplaySolanaMessage, DisplaySolanaTx};
-use ur_registry::solana::sol_sign_request::{SignType, SolSignRequest};
+use ur_registry::solana::sol_sign_request::SolSignRequest;
 use ur_registry::solana::sol_signature::SolSignature;
 use ur_registry::traits::RegistryItem;
 
@@ -19,19 +19,13 @@ pub mod structs;
 unsafe fn build_sign_result(ptr: PtrUR, seed: &[u8]) -> Result<SolSignature, SolanaError> {
     let sign_request = extract_ptr_with_type!(ptr, SolSignRequest);
     let sign_data = sign_request.get_sign_data();
-    let sign_type = sign_request.get_sign_type();
-    let is_complete_transaction = match sign_type {
-        // Exact parsing is performed together with the required-signer check below,
-        // avoiding a second full transaction parse on the normal signing path.
-        SignType::Transaction => true,
-        SignType::Message => {
-            let is_complete_transaction = app_solana::validate_tx(&mut sign_data.clone());
-            if !is_complete_transaction && app_solana::has_tx_prefix(&mut sign_data.clone()) {
-                return Err(SolanaError::InvalidData(
-                    "message contains a transaction prefix with hidden trailing data".to_string(),
-                ));
-            }
-            is_complete_transaction
+    let is_complete_transaction = match app_solana::classify_payload(&sign_data) {
+        app_solana::SolanaPayloadType::Transaction => true,
+        app_solana::SolanaPayloadType::Message => false,
+        app_solana::SolanaPayloadType::MalformedTransaction => {
+            return Err(SolanaError::InvalidData(
+                "transaction contains hidden trailing data".to_string(),
+            ));
         }
     };
     let mut path =
@@ -164,12 +158,20 @@ pub unsafe extern "C" fn solana_parse_message(
 ) -> PtrT<TransactionParseResult<DisplaySolanaMessage>> {
     let sol_sign_request = extract_ptr_with_type!(ptr, SolSignRequest);
     let pubkey = recover_c_char(pubkey);
-    // verify whether the UR is message to prevent using the tx as message
-    if app_solana::has_tx_prefix(&mut sol_sign_request.get_sign_data()) {
-        return TransactionParseResult::from(RustCError::UnsupportedTransaction(
-            "Transaction".to_string(),
-        ))
-        .c_ptr();
+    match app_solana::classify_payload(&sol_sign_request.get_sign_data()) {
+        app_solana::SolanaPayloadType::Message => {}
+        app_solana::SolanaPayloadType::Transaction => {
+            return TransactionParseResult::from(RustCError::UnsupportedTransaction(
+                "Transaction".to_string(),
+            ))
+            .c_ptr();
+        }
+        app_solana::SolanaPayloadType::MalformedTransaction => {
+            return TransactionParseResult::from(SolanaError::InvalidData(
+                "transaction contains hidden trailing data".to_string(),
+            ))
+            .c_ptr();
+        }
     }
     match parse_message(sol_sign_request.get_sign_data(), &pubkey.to_string()) {
         Ok(t) => TransactionParseResult::success(DisplaySolanaMessage::from(t).c_ptr()).c_ptr(),
