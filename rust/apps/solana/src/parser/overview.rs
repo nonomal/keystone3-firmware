@@ -33,6 +33,7 @@ pub struct ProgramOverviewVote {
 
 #[derive(Debug, Clone)]
 pub struct ProgramOverviewGeneral {
+    pub instruction_index: usize,
     pub program: String,
     pub method: String,
     pub value: String,

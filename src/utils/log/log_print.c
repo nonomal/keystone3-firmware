@@ -173,6 +173,7 @@ void LogRustPanic(char* panic_info)
 #else
 
 #include "draw_on_lcd.h"
+#include "mhscpu.h"
 #include "presetting.h"
 #include "version.h"
 #include "hardware_version.h"
@@ -181,6 +182,7 @@ LV_FONT_DECLARE(openSans_20);
 
 void LogRustPanic(char* panic_info)
 {
+    NVIC_SystemReset();
     PrintOnLcd(&openSans_20, 0xFFFF, "The error was caused by a failed data request.\nYour assets remain safe.\n");
     PrintErrorInfoOnLcd();
     uint32_t c = 0x666666;

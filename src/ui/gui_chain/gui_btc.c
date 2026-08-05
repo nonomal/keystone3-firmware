@@ -1465,7 +1465,7 @@ void GuiBtcTxOverview(lv_obj_t *parent, void *totalData)
     }
 
     if (overviewData->is_large_fee) {
-        lastView = CreateSighashWarningView(parent, lastView, _("btc_large_fee_warning"));
+        lastView = CreateSighashWarningView(parent, lastView, _("utxo_large_fee_warning"));
     }
 
     if (NeedShowCheckInputValueHint(txData)) {
