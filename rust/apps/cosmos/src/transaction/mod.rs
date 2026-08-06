@@ -240,8 +240,8 @@ mod tests {
                 {
                     "Method": "Delegate",
                     "Value": "10000000000000000 atevmos",
-                    "From": "evmos1tqsdz785sqjnlggee0lwxjwfk6dl36ae2uf9er",
-                    "To": "evmosvaloper10t6kyy4jncvnevmgq6q2ntcy90gse3yxa7x2p4"
+                    "Delegator": "evmos1tqsdz785sqjnlggee0lwxjwfk6dl36ae2uf9er",
+                    "Validator": "evmosvaloper10t6kyy4jncvnevmgq6q2ntcy90gse3yxa7x2p4"
                 }
             ]
         });
@@ -282,8 +282,8 @@ mod tests {
                 {
                     "Method": "Delegate",
                     "Value": "2000000 uosmo",
-                    "From": "osmo17u02f80vkafne9la4wypdx3kxxxxwm6fzmcgyc",
-                    "To": "osmovaloper1hh0g5xf23e5zekg45cmerc97hs4n2004dy2t26"
+                    "Delegator": "osmo17u02f80vkafne9la4wypdx3kxxxxwm6fzmcgyc",
+                    "Validator": "osmovaloper1hh0g5xf23e5zekg45cmerc97hs4n2004dy2t26"
                 }
             ]
         });

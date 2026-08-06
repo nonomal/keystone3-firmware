@@ -22,6 +22,7 @@ use ur_registry::pb::protoc::EthTx;
 pub struct DisplayETH {
     pub(crate) tx_type: PtrString,
     pub(crate) chain_id: u64,
+    pub replay_protected: bool,
     pub(crate) overview: PtrT<DisplayETHOverview>,
     pub(crate) detail: PtrT<DisplayETHDetail>,
 }
@@ -85,6 +86,7 @@ impl TryFrom<EthTx> for DisplayETH {
             let display_eth = DisplayETH {
                 tx_type: convert_c_char("Legacy".to_string()),
                 chain_id: 1,
+                replay_protected: false,
                 overview: display_tx_overview.c_ptr(),
                 detail: display_tx_detail.c_ptr(),
             };
@@ -122,6 +124,7 @@ impl TryFrom<EthTx> for DisplayETH {
             let display_eth = DisplayETH {
                 tx_type: convert_c_char("Legacy".to_string()),
                 chain_id: 1,
+                replay_protected: false,
                 overview: display_tx_overview.c_ptr(),
                 detail: display_tx_detail.c_ptr(),
             };
@@ -215,6 +218,7 @@ impl From<ParsedEthereumTransaction> for DisplayETH {
                 None => convert_c_char(String::from("Legacy")),
             },
             chain_id: value.chain_id,
+            replay_protected: value.replay_protected,
             overview: DisplayETHOverview::from(value.clone()).c_ptr(),
             detail: DisplayETHDetail::from(value.clone()).c_ptr(),
         }

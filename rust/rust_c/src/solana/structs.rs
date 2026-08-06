@@ -24,6 +24,7 @@ pub struct DisplaySolanaTx {
 
 #[repr(C)]
 pub struct DisplaySolanaTxOverviewGeneral {
+    pub instruction_index: usize,
     pub program: PtrString,
     pub method: PtrString,
     pub value: PtrString,
@@ -61,6 +62,7 @@ impl Free for DisplaySolanaTxOverviewGeneral {
 impl From<&ProgramOverviewGeneral> for DisplaySolanaTxOverviewGeneral {
     fn from(value: &ProgramOverviewGeneral) -> Self {
         Self {
+            instruction_index: value.instruction_index,
             program: convert_c_char(value.program.to_string()),
             method: convert_c_char(value.method.to_string()),
             value: convert_c_char(value.value.to_string()),
@@ -397,6 +399,16 @@ impl Free for DisplaySolanaTxOverview {
 impl From<ParsedSolanaTx> for DisplaySolanaTx {
     fn from(value: ParsedSolanaTx) -> Self {
         let mut overview = DisplaySolanaTxOverview::from(&value);
+        if !value.additional_overviews.is_empty() {
+            overview.general = VecFFI::from(
+                value
+                    .additional_overviews
+                    .iter()
+                    .map(DisplaySolanaTxOverviewGeneral::from)
+                    .collect_vec(),
+            )
+            .c_ptr();
+        }
         if !value.unknown_programs.is_empty() {
             overview.additional_unknown_programs = VecFFI::from(
                 value
