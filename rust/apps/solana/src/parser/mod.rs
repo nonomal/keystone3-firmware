@@ -509,6 +509,7 @@ impl ParsedSolanaTx {
                 instruction_index: index + 1,
                 program: d.common.program.to_string(),
                 method: d.common.method.to_string(),
+                memo: String::new(),
                 value: String::new(),
                 from: String::new(),
                 to: String::new(),
@@ -551,6 +552,9 @@ impl ParsedSolanaTx {
                         Self::has_unusual_token_decimals(&value.mint, value.decimals);
                     item.decimals = value.decimals;
                 }
+                ProgramDetail::SquadsV4VaultTransactionCreate(value) => {
+                    item.memo = value.memo.clone().unwrap_or_default();
+                }
                 _ => {}
             }
             overview.push(item)
@@ -578,7 +582,6 @@ impl ParsedSolanaTx {
     }
     fn build_squads_v4_proposal_overview(details: &[SolanaDetail]) -> Result<SolanaOverview> {
         let mut proposal_overview_vec: Vec<ProgramOverviewProposal> = Vec::new();
-        let mut proposal_index = 0usize;
         for d in details {
             let kind = &d.kind;
             match kind {
@@ -591,31 +594,10 @@ impl ParsedSolanaTx {
                     });
                 }
                 ProgramDetail::SquadsV4ProposalCreate(v) => {
-                    // `ProposalCreateArgs` does not contain a memo. Squads stores
-                    // the proposal description on the corresponding
-                    // `VaultTransactionCreate` instruction in the same transaction.
-                    // Pair them by instruction order so the proposal card can show
-                    // the text the user is actually approving.
-                    let memo = details
-                        .iter()
-                        .filter_map(|detail| {
-                            if let ProgramDetail::SquadsV4VaultTransactionCreate(vault) =
-                                &detail.kind
-                            {
-                                Some(vault.memo.as_deref())
-                            } else {
-                                None
-                            }
-                        })
-                        .nth(proposal_index)
-                        .flatten()
-                        .filter(|memo| !memo.is_empty())
-                        .map(ToString::to_string);
-                    proposal_index += 1;
                     proposal_overview_vec.push(ProgramOverviewProposal {
                         program: "Squads".to_string(),
                         method: "ProposalCreate".to_string(),
-                        memo,
+                        memo: None,
                         data: serde_json::to_string(v).ok(),
                     });
                 }
@@ -1215,13 +1197,19 @@ mod tests {
     }
 
     #[test]
-    fn squads_proposal_create_overview_shows_corresponding_memo() {
+    fn squads_vault_transaction_create_overview_keeps_its_memo() {
         use crate::solana_lib::squads_v4::instructions::{
             ProposalCreateArgs, VaultTransactionCreateArgs,
         };
 
+        const QA_MEMO: &str = concat!(
+            "Keystone offers seamless compatibility with leading wallets such as MetaMask, ",
+            "OKX Wallet, Tonkeeper, Solflare, Backpack, Blue Wallet, Keplr, Eternl and others, ",
+            "ensuring top-tier security for a wide range of cryptocurrencies, including ",
+            "Bitcoin and Ethereum."
+        );
         let mut details = Vec::new();
-        for (transaction_index, memo) in [(7, "Treasury payment"), (8, "Add new member")] {
+        for (transaction_index, memo) in [(7, QA_MEMO), (8, "Add new member")] {
             details.push(SolanaDetail {
                 common: CommonDetail {
                     program: "SquadsV4".to_string(),
@@ -1246,19 +1234,30 @@ mod tests {
             });
         }
 
-        let overview = ParsedSolanaTx::build_squads_v4_proposal_overview(&details).unwrap();
+        let display_type = ParsedSolanaTx::detect_display_type(&details);
+        assert!(matches!(display_type, SolanaTxDisplayType::SquadsV4));
+        let overview = ParsedSolanaTx::build_overview(&display_type, &details).unwrap();
         let SolanaOverview::SquadsV4Proposal(items) = overview else {
             panic!("expected Squads proposal overview");
         };
-        let proposal_memos = items
+        let vault_memos = items
             .iter()
-            .filter(|item| item.method == "ProposalCreate")
+            .filter(|item| item.method == "VaultTransactionCreate")
             .map(|item| item.memo.as_deref())
             .collect::<Vec<_>>();
-        assert_eq!(
-            proposal_memos,
-            vec![Some("Treasury payment"), Some("Add new member")]
-        );
+        assert_eq!(vault_memos, vec![Some(QA_MEMO), Some("Add new member")]);
+        assert!(items
+            .iter()
+            .filter(|item| item.method == "ProposalCreate")
+            .all(|item| item.memo.is_none()));
+
+        let general_items = ParsedSolanaTx::build_general_items(&details, None).unwrap();
+        let general_vault_memos = general_items
+            .iter()
+            .filter(|item| item.method == "VaultTransactionCreate")
+            .map(|item| item.memo.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(general_vault_memos, vec![QA_MEMO, "Add new member"]);
     }
 
     #[test]

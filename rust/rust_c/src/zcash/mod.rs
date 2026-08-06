@@ -940,10 +940,8 @@ pub unsafe extern "C" fn rust_aes256_cbc_decrypt(
     match Aes256CbcDec::new(key, iv).decrypt_padded_vec_mut::<Pkcs7>(&data) {
         Ok(pt) => match String::from_utf8(pt) {
             Ok(pt_str) => SimpleResponse::success(convert_c_char(pt_str)).simple_c_ptr(),
-            Err(_) => {
-                SimpleResponse::from(RustCError::InvalidHex("invalid plaintext".to_string()))
-                    .simple_c_ptr()
-            }
+            Err(_) => SimpleResponse::from(RustCError::InvalidHex("invalid plaintext".to_string()))
+                .simple_c_ptr(),
         },
         Err(_e) => SimpleResponse::from(RustCError::InvalidHex("decrypt failed".to_string()))
             .simple_c_ptr(),
@@ -1020,10 +1018,8 @@ pub unsafe extern "C" fn rust_decrypt_ufvk_blob(
     match Aes256CbcDec::new(key, iv).decrypt_padded_vec_mut::<Pkcs7>(&data) {
         Ok(pt) => match String::from_utf8(pt) {
             Ok(pt_str) => SimpleResponse::success(convert_c_char(pt_str)).simple_c_ptr(),
-            Err(_) => {
-                SimpleResponse::from(RustCError::InvalidHex("invalid plaintext".to_string()))
-                    .simple_c_ptr()
-            }
+            Err(_) => SimpleResponse::from(RustCError::InvalidHex("invalid plaintext".to_string()))
+                .simple_c_ptr(),
         },
         Err(_e) => SimpleResponse::from(RustCError::InvalidHex("decrypt failed".to_string()))
             .simple_c_ptr(),
@@ -1341,11 +1337,8 @@ mod tests {
         let mut data = b"hello world";
         let seed = hex::decode("5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4").unwrap();
         // AES key derived from the seed at the dedicated path.
-        let key_bytes = get_private_key_by_seed(
-            &seed,
-            &"m/44'/1557192335'/0'/3'/0'".to_string(),
-        )
-        .unwrap();
+        let key_bytes =
+            get_private_key_by_seed(&seed, &"m/44'/1557192335'/0'/3'/0'".to_string()).unwrap();
         let mut iv_bytes = [0u8; 16];
         iv_bytes.copy_from_slice(&hex::decode("73e6ca87d5cd5622cdc747367905efe7").unwrap());
         let iv = GenericArray::from_slice(&iv_bytes);

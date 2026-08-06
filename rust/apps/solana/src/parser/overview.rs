@@ -36,6 +36,7 @@ pub struct ProgramOverviewGeneral {
     pub instruction_index: usize,
     pub program: String,
     pub method: String,
+    pub memo: String,
     pub value: String,
     pub from: String,
     pub to: String,

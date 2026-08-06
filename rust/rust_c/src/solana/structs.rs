@@ -27,6 +27,7 @@ pub struct DisplaySolanaTxOverviewGeneral {
     pub instruction_index: usize,
     pub program: PtrString,
     pub method: PtrString,
+    pub memo: PtrString,
     pub value: PtrString,
     pub from: PtrString,
     pub to: PtrString,
@@ -46,6 +47,7 @@ impl Free for DisplaySolanaTxOverviewGeneral {
     unsafe fn free(&self) {
         free_str_ptr!(self.program);
         free_str_ptr!(self.method);
+        free_str_ptr!(self.memo);
         free_str_ptr!(self.value);
         free_str_ptr!(self.from);
         free_str_ptr!(self.to);
@@ -65,6 +67,7 @@ impl From<&ProgramOverviewGeneral> for DisplaySolanaTxOverviewGeneral {
             instruction_index: value.instruction_index,
             program: convert_c_char(value.program.to_string()),
             method: convert_c_char(value.method.to_string()),
+            memo: convert_c_char(value.memo.to_string()),
             value: convert_c_char(value.value.to_string()),
             from: convert_c_char(value.from.to_string()),
             to: convert_c_char(value.to.to_string()),
