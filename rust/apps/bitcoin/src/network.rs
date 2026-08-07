@@ -1,6 +1,8 @@
 use crate::errors::BitcoinError;
 use alloc::string::{String, ToString};
 use core::str::FromStr;
+use ur_registry::pb::protoc::sign_transaction::Transaction;
+use ur_registry::pb::protoc::SignTransaction;
 
 pub trait NetworkT {
     fn get_unit(&self) -> String;
@@ -15,6 +17,31 @@ pub struct LargeFeePolicy {
     /// Fee-rate threshold in the network's smallest unit per virtual byte.
     /// Some networks use a fee policy that is not meaningfully byte based.
     pub rate_threshold_per_vbyte: Option<u64>,
+}
+
+pub const UNSUPPORTED_LEGACY_UTXO_MESSAGE: &str =
+    "unsupported legacy UTXO transaction; only BCH, DASH and LTC are allowed";
+
+pub fn is_legacy_utxo_transaction(sign_tx: &SignTransaction) -> bool {
+    matches!(
+        sign_tx.transaction.as_ref(),
+        Some(
+            Transaction::BtcTx(_)
+                | Transaction::BchTx(_)
+                | Transaction::DashTx(_)
+                | Transaction::LtcTx(_)
+                | Transaction::DogeTx(_)
+        )
+    )
+}
+
+/// The deprecated raw-protobuf path is retained only for these transaction
+/// variants. `coin_code` is deliberately not used as a discriminator.
+pub fn is_supported_legacy_utxo_transaction(sign_tx: &SignTransaction) -> bool {
+    matches!(
+        sign_tx.transaction.as_ref(),
+        Some(Transaction::BchTx(_) | Transaction::DashTx(_) | Transaction::LtcTx(_))
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -156,5 +183,41 @@ impl NetworkT for CustomNewNetwork {
             absolute_threshold: 5_000_000,
             rate_threshold_per_vbyte: Some(100),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_legacy_utxo_transaction, is_supported_legacy_utxo_transaction};
+    use ur_registry::pb::protoc::sign_transaction::Transaction;
+    use ur_registry::pb::protoc::{BchTx, BtcTx, DashTx, DogeTx, LtcTx, SignTransaction};
+
+    fn sign_tx(coin_code: &str, transaction: Transaction) -> SignTransaction {
+        SignTransaction {
+            coin_code: coin_code.to_string(),
+            transaction: Some(transaction),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn bch_dash_and_ltc_variants_are_supported_without_using_coin_code() {
+        let bch = sign_tx("ignored", Transaction::BchTx(BchTx::default()));
+        let dash = sign_tx("BTC", Transaction::DashTx(DashTx::default()));
+        let ltc = sign_tx("DOGE", Transaction::LtcTx(LtcTx::default()));
+        assert!(is_supported_legacy_utxo_transaction(&bch));
+        assert!(is_supported_legacy_utxo_transaction(&dash));
+        assert!(is_supported_legacy_utxo_transaction(&ltc));
+    }
+
+    #[test]
+    fn bitcoin_and_dogecoin_variants_are_rejected_regardless_of_coin_code() {
+        let btc = sign_tx("LTC", Transaction::BtcTx(BtcTx::default()));
+        let doge = sign_tx("BCH", Transaction::DogeTx(DogeTx::default()));
+
+        assert!(is_legacy_utxo_transaction(&btc));
+        assert!(is_legacy_utxo_transaction(&doge));
+        assert!(!is_supported_legacy_utxo_transaction(&btc));
+        assert!(!is_supported_legacy_utxo_transaction(&doge));
     }
 }
