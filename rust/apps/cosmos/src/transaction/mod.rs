@@ -137,7 +137,6 @@ mod tests {
             "common": {
                 "Network": "Cosmos Hub",
                 "Chain ID": "cosmoshub-4",
-                "Max Fee": "0.002583 ATOM",
                 "Fee": "0.002583 ATOM",
                 "Gas Limit": "103301"
             },
@@ -187,7 +186,6 @@ mod tests {
                 "Network": "Evmos Testnet",
                 "Chain ID": "evmos_9000-4",
                 "Fee": "2625000000000000 atevmos",
-                "Max Fee": "2625000000000000 atevmos",
                 "Gas Limit": "105000",
             },
             "kind": [
@@ -234,7 +232,6 @@ mod tests {
                 "Chain ID": "evmos_9000-4",
                 "Fee": "8750000000000000 atevmos",
                 "Gas Limit": "350000",
-                "Max Fee": "8750000000000000 atevmos",
             },
             "kind": [
                 {
@@ -276,7 +273,6 @@ mod tests {
                 "Chain ID": "osmo-test-5",
                 "Fee": "4625 uosmo",
                 "Gas Limit": "184991",
-                "Max Fee": "4625 uosmo",
             },
             "kind": [
                 {
@@ -318,7 +314,6 @@ mod tests {
                 "Network": "Evmos Testnet",
                 "Chain ID": "evmos_9000-4",
                 "Fee": "7500000000000000 atevmos",
-                "Max Fee": "7500000000000000 atevmos",
                 "Gas Limit": "300000"
             },
             "kind": [
@@ -360,7 +355,6 @@ mod tests {
                 "Network": "Unknown Network",
                 "Chain ID": "osmo-test-5",
                 "Fee": "9512 uosmo",
-                "Max Fee": "9512 uosmo",
                 "Gas Limit": "237788"
             },
             "kind": [
@@ -403,7 +397,6 @@ mod tests {
                 "Network": "Evmos Testnet",
                 "Chain ID": "evmos_9000-4",
                 "Fee": "37500000000000000 atevmos",
-                "Max Fee": "37500000000000000 atevmos",
                 "Gas Limit": "1500000"
             },
             "kind": [
@@ -447,7 +440,6 @@ mod tests {
                 "Chain ID": "osmo-test-5",
                 "Fee": "8164 uosmo",
                 "Gas Limit": "326559",
-                "Max Fee": "8164 uosmo"
             },
             "kind": [
                 {
@@ -489,7 +481,6 @@ mod tests {
                 "Network": "Evmos Testnet",
                 "Chain ID": "evmos_9000-4",
                 "Fee": "8750000000000000 atevmos",
-                "Max Fee": "8750000000000000 atevmos",
                 "Gas Limit": "350000"
             },
             "kind": [
@@ -529,7 +520,6 @@ mod tests {
                 "Network": "Evmos Testnet",
                 "Chain ID": "evmos_9000-4",
                 "Fee": "100 ucosm",
-                "Max Fee": "100 ucosm",
                 "Gas Limit": "250",
                 "Memo": "Some memo"
             },
@@ -572,7 +562,6 @@ mod tests {
                 "Network": "Evmos Testnet",
                 "Chain ID": "evmos_9000-4",
                 "Fee": "100 ucosm",
-                "Max Fee": "100 ucosm",
                 "Gas Limit": "250",
                 "Memo": "Some memo"
             },
@@ -616,7 +605,6 @@ mod tests {
                 "Network": "Osmosis",
                 "Chain ID": "osmosis-1",
                 "Fee": "5333 uosmo",
-                "Max Fee": "5333 uosmo",
                 "Gas Limit": "213305"
             },
             "kind": [
@@ -667,7 +655,6 @@ mod tests {
                 "Network": "Osmosis",
                 "Chain ID": "osmosis-1",
                 "Fee": "2000 uosmo",
-                "Max Fee": "2000 uosmo",
                 "Gas Limit": "12345"
             },
             "kind": [
@@ -710,7 +697,6 @@ mod tests {
                 "Network": "Osmosis",
                 "Chain ID": "osmosis-1",
                 "Fee": "1946 uosmo",
-                "Max Fee": "1946 uosmo",
                 "Gas Limit": "77814"
             },
             "kind": [
@@ -750,7 +736,6 @@ mod tests {
                 "Network": "Osmosis",
                 "Chain ID": "osmosis-1",
                 "Fee": "2000 uosmo",
-                "Max Fee": "2000 uosmo",
                 "Gas Limit": "12345"
             },
             "kind": [

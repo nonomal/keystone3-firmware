@@ -1541,6 +1541,7 @@ static lv_obj_t *CreateEthDetailsRawDataButton(lv_obj_t *parent, lv_obj_t *lastV
     lv_obj_set_style_text_color(button, lv_color_hex(0x1BE0C6), LV_PART_MAIN);
     if (label != NULL) {
         lv_obj_set_style_text_color(label, lv_color_hex(0x1BE0C6), LV_PART_MAIN);
+        lv_obj_align(label, LV_ALIGN_LEFT_MID, 24, 0);
     }
     if (lastView != NULL) {
         lv_obj_align_to(button, lastView, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
@@ -1663,6 +1664,7 @@ static lv_obj_t *CreateEthParsedContractView(
     lv_obj_set_style_text_color(rawDataButton, lv_color_hex(0x1BE0C6), LV_PART_MAIN);
     if (rawDataLabel != NULL) {
         lv_obj_set_style_text_color(rawDataLabel, lv_color_hex(0x1BE0C6), LV_PART_MAIN);
+        lv_obj_align(rawDataLabel, LV_ALIGN_LEFT_MID, 0, 0);
     }
     lv_obj_align(rawDataButton, LV_ALIGN_TOP_LEFT, 24, y);
     lv_obj_add_event_cb(rawDataButton, EthContractCheckRawData, LV_EVENT_CLICKED, NULL);

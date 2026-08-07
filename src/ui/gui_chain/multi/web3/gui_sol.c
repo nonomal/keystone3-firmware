@@ -903,13 +903,23 @@ static lv_obj_t *GuiShowSolTxGeneralOverview(
         const char *method = strlen(general->data[i].method) > 0
             ? general->data[i].method
             : "Unknown";
-        lv_obj_t *actionCard = CreateTransactionOverviewCardWithWidth(
-            parent,
-            order,
-            program,
-            _("Method"),
-            method,
-            SOL_COMPONENT_WIDTH);
+        lv_obj_t *actionCard;
+        if (strcmp(method, "VaultTransactionCreate") == 0 &&
+            strlen(general->data[i].memo) > 0) {
+            // Preserve the established Squads review card even when a mixed
+            // transaction reaches the General/addon path.  The memo belongs
+            // to VaultTransactionCreate, not ProposalCreate.
+            actionCard = CreateSolanaSquadsProposalOverviewCard(
+                parent, "Squads", method, general->data[i].memo, "");
+        } else {
+            actionCard = CreateTransactionOverviewCardWithWidth(
+                parent,
+                order,
+                program,
+                _("Method"),
+                method,
+                SOL_COMPONENT_WIDTH);
+        }
         if (lastView != NULL) {
             lv_obj_align_to(actionCard, lastView, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
         }
@@ -982,6 +992,41 @@ static lv_obj_t *GuiGetSolTxBottomView(lv_obj_t *parent)
     return bottomView;
 }
 
+static bool GuiHasSolTxAdditionalUnknownPrograms(
+    PtrT_DisplaySolanaTxOverview overviewData)
+{
+    PtrT_VecFFI_PtrString programs = overviewData->additional_unknown_programs;
+    return programs != NULL && programs->size > 0;
+}
+
+static lv_obj_t *GuiAppendSolTxAdditionalUnknownProgramCards(
+    lv_obj_t *parent,
+    PtrT_DisplaySolanaTxOverview overviewData,
+    lv_obj_t *lastView)
+{
+    PtrT_VecFFI_PtrString programs = overviewData->additional_unknown_programs;
+    if (programs == NULL) {
+        return lastView;
+    }
+
+    for (int i = 0; i < programs->size; i++) {
+        char order[BUFFER_SIZE_16] = {0};
+        snprintf_s(order, BUFFER_SIZE_16, "#%d", i + 1);
+        lv_obj_t *programCard = CreateTransactionOverviewCardWithWidth(
+            parent,
+            order,
+            "Unknown Program",
+            "Program Address",
+            programs->data[i],
+            SOL_COMPONENT_WIDTH);
+        if (lastView != NULL) {
+            lv_obj_align_to(programCard, lastView, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
+        }
+        lastView = programCard;
+    }
+    return lastView;
+}
+
 static void GuiShowSolTxAdditionalUnknownPrograms(
     lv_obj_t *parent,
     PtrT_DisplaySolanaTxOverview overviewData)
@@ -1015,19 +1060,7 @@ static void GuiShowSolTxAdditionalUnknownPrograms(
         }
     }
 
-    for (int i = 0; i < programs->size; i++) {
-        char order[BUFFER_SIZE_16] = {0};
-        snprintf_s(order, BUFFER_SIZE_16, "#%d", i + 1);
-        lv_obj_t *programCard = CreateTransactionOverviewCardWithWidth(
-            parent,
-            order,
-            "Unknown Program",
-            "Program Address",
-            programs->data[i],
-            SOL_COMPONENT_WIDTH);
-        lv_obj_align_to(programCard, lastView, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
-        lastView = programCard;
-    }
+    GuiAppendSolTxAdditionalUnknownProgramCards(parent, overviewData, lastView);
 }
 static void GuiShowSolTxUnknownOverview(lv_obj_t *parent)
 {
@@ -1163,7 +1196,7 @@ static void GuiShowSolTxMultiSigCreateDetail(lv_obj_t *parent, PtrT_DisplaySolan
         lv_obj_set_style_pad_all(memberItem, 0, LV_PART_MAIN); // remove all default padding
         lv_obj_set_style_pad_left(memberItem, 24, LV_PART_MAIN);
         lv_obj_set_style_pad_top(memberItem, 16, LV_PART_MAIN);
-        lv_obj_add_flag(memberItem, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(memberItem, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_t *memberItemLabel = lv_label_create(memberItem);
         char memberText[64];
         snprintf(memberText, sizeof(memberText), "Member %d", i + 1);
@@ -1446,12 +1479,20 @@ void GuiShowSolTxOverview(lv_obj_t *parent, void *totalData)
     lv_obj_add_flag(parent, LV_OBJ_FLAG_CLICKABLE);
     DisplaySolanaTx *txData = (DisplaySolanaTx*)totalData;
     PtrT_DisplaySolanaTxOverview overviewData = txData->overview;
+    bool unknownProgramsRendered = false;
     if (0 == strcmp(overviewData->display_type, "Transfer")) {
         GuiShowSolTxTransferOverview(parent, overviewData);
     } else if (0 == strcmp(overviewData->display_type, "Vote")) {
         GuiShowSolTxVoteOverview(parent, overviewData);
     } else if (0 == strcmp(overviewData->display_type, "General")) {
-        GuiShowSolTxGeneralOverview(parent, overviewData, NULL);
+        lv_obj_t *lastView = NULL;
+        if (GuiHasSolTxAdditionalUnknownPrograms(overviewData)) {
+            lastView = GuiCreateWarningCard(parent);
+            lv_obj_align(lastView, LV_ALIGN_TOP_LEFT, 0, 0);
+        }
+        lastView = GuiShowSolTxGeneralOverview(parent, overviewData, lastView);
+        GuiAppendSolTxAdditionalUnknownProgramCards(parent, overviewData, lastView);
+        unknownProgramsRendered = true;
     } else if (0 == strcmp(overviewData->display_type, "squads_multisig_create")) {
         GuiShowSolTxMultiSigCreateOverview(parent, overviewData);
     } else if (0 == strcmp(overviewData->display_type, "TokenTransfer")) {
@@ -1475,12 +1516,18 @@ void GuiShowSolTxOverview(lv_obj_t *parent, void *totalData)
         0 != strcmp(overviewData->display_type, "jupiterv6_swap")) {
         GuiShowSolTxGeneralOverview(parent, overviewData, GuiGetSolTxBottomView(parent));
     }
-    GuiShowSolTxAdditionalUnknownPrograms(parent, overviewData);
+    if (!unknownProgramsRendered) {
+        GuiShowSolTxAdditionalUnknownPrograms(parent, overviewData);
+    }
     lv_obj_update_layout(parent);
     lv_obj_scroll_to_y(parent, 0, LV_ANIM_OFF);
 }
 
-static void GuiShowSolTxRawDetailCard(lv_obj_t *parent, PtrString txDetail, lv_obj_t *lastView)
+static void GuiShowSolTxRawDetailCard(
+    lv_obj_t *parent,
+    PtrString txDetail,
+    lv_obj_t *lastView,
+    bool useParentScroll)
 {
     lv_obj_t *cont = lv_obj_create(parent);
     lv_obj_set_size(cont, SOL_COMPONENT_WIDTH, 444);
@@ -1495,13 +1542,18 @@ static void GuiShowSolTxRawDetailCard(lv_obj_t *parent, PtrString txDetail, lv_o
     lv_obj_set_style_pad_left(cont, 24, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_pad_right(cont, 24, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_align(cont, LV_ALIGN_TOP_LEFT, 0, 0);
-    lv_obj_add_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(cont, LV_OBJ_FLAG_CLICKABLE);
+    if (useParentScroll) {
+        lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(cont, LV_OBJ_FLAG_CLICKABLE);
+    } else {
+        lv_obj_add_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(cont, LV_OBJ_FLAG_CLICKABLE);
+    }
     lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
 
     lv_obj_t *label = lv_label_create(cont);
     const char *rawDetail = txDetail == NULL ? "" : txDetail;
-    cJSON *root = cJSON_Parse(rawDetail);
+    cJSON *root = useParentScroll ? NULL : cJSON_Parse(rawDetail);
     char *retStr = root == NULL ? NULL : cJSON_PrintBuffered(root, BUFFER_SIZE_1024, false);
     lv_label_set_text(label, retStr == NULL ? rawDetail : retStr);
     EXT_FREE(retStr);
@@ -1510,6 +1562,10 @@ static void GuiShowSolTxRawDetailCard(lv_obj_t *parent, PtrString txDetail, lv_o
     lv_obj_set_width(label, SOL_COMPONENT_CONTENT_WIDTH);
     SetTitleLabelStyle(label);
     lv_obj_align(label, LV_ALIGN_TOP_LEFT, 0, 0);
+    if (useParentScroll) {
+        lv_obj_update_layout(label);
+        lv_obj_set_height(cont, lv_obj_get_height(label) + 32);
+    }
     if (lastView == NULL) {
         lv_obj_align(cont, LV_ALIGN_TOP_LEFT, 0, 0);
     } else {
@@ -1532,10 +1588,11 @@ void GuiShowSolTxDetail(lv_obj_t *parent, void *totalData)
         lv_obj_set_scrollbar_mode(parent, LV_SCROLLBAR_MODE_OFF);
         GuiShowSolTxMultiSigCreateDetail(parent, overviewData);
         lv_obj_update_layout(parent);
-        GuiShowSolTxRawDetailCard(parent, txData->detail, GuiGetSolTxBottomView(parent));
+        GuiShowSolTxRawDetailCard(
+            parent, txData->detail, GuiGetSolTxBottomView(parent), true);
         lv_obj_update_layout(parent);
         lv_obj_scroll_to_y(parent, 0, LV_ANIM_OFF);
         return;
     }
-    GuiShowSolTxRawDetailCard(parent, txData->detail, NULL);
+    GuiShowSolTxRawDetailCard(parent, txData->detail, NULL, false);
 }

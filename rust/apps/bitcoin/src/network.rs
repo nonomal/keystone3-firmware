@@ -5,6 +5,16 @@ use core::str::FromStr;
 pub trait NetworkT {
     fn get_unit(&self) -> String;
     fn normalize(&self) -> String;
+    fn large_fee_policy(&self) -> LargeFeePolicy;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LargeFeePolicy {
+    /// Absolute fee threshold in the network's smallest unit.
+    pub absolute_threshold: u64,
+    /// Fee-rate threshold in the network's smallest unit per virtual byte.
+    /// Some networks use a fee policy that is not meaningfully byte based.
+    pub rate_threshold_per_vbyte: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +55,41 @@ impl NetworkT for Network {
             Network::Zcash => "Zcash",
         }
         .to_string()
+    }
+
+    fn large_fee_policy(&self) -> LargeFeePolicy {
+        match self {
+            // BTC-like fee market: 0.05 BTC or 100 sat/vB.
+            Network::Bitcoin | Network::BitcoinTestnet | Network::AvaxBtcBridge => LargeFeePolicy {
+                absolute_threshold: 5_000_000,
+                rate_threshold_per_vbyte: Some(100),
+            },
+            // Litecoin's normal relay/wallet fee scale is higher in litoshi/vB.
+            Network::Litecoin => LargeFeePolicy {
+                absolute_threshold: 10_000_000,
+                rate_threshold_per_vbyte: Some(1_000),
+            },
+            // Dogecoin Core recommends 0.01 DOGE/kB. Small transactions can
+            // therefore legitimately be several thousand koinu/vB.
+            Network::Dogecoin => LargeFeePolicy {
+                absolute_threshold: 100_000_000,
+                rate_threshold_per_vbyte: Some(10_000),
+            },
+            Network::Dash => LargeFeePolicy {
+                absolute_threshold: 10_000_000,
+                rate_threshold_per_vbyte: Some(100),
+            },
+            Network::BitcoinCash => LargeFeePolicy {
+                absolute_threshold: 10_000_000,
+                rate_threshold_per_vbyte: Some(100),
+            },
+            // Zcash conventional fees are action based rather than a simple
+            // sat/vB-style market, so only use the absolute safety threshold.
+            Network::Zcash => LargeFeePolicy {
+                absolute_threshold: 10_000_000,
+                rate_threshold_per_vbyte: None,
+            },
+        }
     }
 }
 
@@ -104,5 +149,12 @@ impl NetworkT for CustomNewNetwork {
             CustomNewNetwork::FractalBitcoinTest => "Fractal Bitcoin Testnet",
         }
         .to_string()
+    }
+
+    fn large_fee_policy(&self) -> LargeFeePolicy {
+        LargeFeePolicy {
+            absolute_threshold: 5_000_000,
+            rate_threshold_per_vbyte: Some(100),
+        }
     }
 }
