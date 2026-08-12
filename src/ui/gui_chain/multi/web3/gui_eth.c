@@ -1105,13 +1105,19 @@ void GetEthPersonalMessageType(void *indata, void *param, uint32_t maxLen)
 void GetMessageFrom(void *indata, void *param, uint32_t maxLen)
 {
     DisplayETHPersonalMessage *message = (DisplayETHPersonalMessage *)param;
-    if (message->from == NULL) {
-        strcpy_s((char *)indata, maxLen, "");
+    if (indata == NULL || maxLen == 0) {
+        return;
+    }
+    if (message == NULL || message->from == NULL) {
+        ((char *)indata)[0] = '\0';
         return;
     }
     if (strlen(message->from) >= maxLen) {
-        snprintf((char *)indata, maxLen - 3, "%s", message->from);
-        strcat((char *)indata, "...");
+        if (maxLen <= 4) {
+            snprintf((char *)indata, maxLen, "%.*s", (int)(maxLen - 1), "...");
+        } else {
+            snprintf((char *)indata, maxLen, "%.*s...", (int)(maxLen - 4), message->from);
+        }
     } else {
         strcpy_s((char *)indata, maxLen, message->from);
     }
@@ -1119,9 +1125,19 @@ void GetMessageFrom(void *indata, void *param, uint32_t maxLen)
 void GetMessageUtf8(void *indata, void *param, uint32_t maxLen)
 {
     DisplayETHPersonalMessage *message = (DisplayETHPersonalMessage *)param;
+    if (indata == NULL || maxLen == 0) {
+        return;
+    }
+    if (message == NULL || message->utf8_message == NULL) {
+        ((char *)indata)[0] = '\0';
+        return;
+    }
     if (strlen(message->utf8_message) >= maxLen) {
-        snprintf((char *)indata, maxLen - 3, "%s", message->utf8_message);
-        strcat((char *)indata, "...");
+        if (maxLen <= 4) {
+            snprintf((char *)indata, maxLen, "%.*s", (int)(maxLen - 1), "...");
+        } else {
+            snprintf((char *)indata, maxLen, "%.*s...", (int)(maxLen - 4), message->utf8_message);
+        }
     } else {
         snprintf((char *)indata, maxLen, "%s", message->utf8_message);
     }
@@ -1129,13 +1145,22 @@ void GetMessageUtf8(void *indata, void *param, uint32_t maxLen)
 
 void GetMessageRaw(void *indata, void *param, uint32_t maxLen)
 {
-    int len = strlen("\n#F5C131 The data is not parseable. Please#\n#F5C131 refer to the software wallet interface#\n#F5C131 for viewing.#");
+    const char *warning = "\n#F5C131 The data is not parseable. Please#\n#F5C131 refer to the software wallet interface#\n#F5C131 for viewing.#";
+    size_t warningLen = strlen(warning);
     DisplayETHPersonalMessage *message = (DisplayETHPersonalMessage *)param;
-    if (strlen(message->raw_message) >= maxLen - len) {
-        snprintf((char *)indata, maxLen - 3 - len, "%s", message->raw_message);
-        strcat((char *)indata, "...");
+    if (indata == NULL || maxLen == 0) {
+        return;
+    }
+    if (message == NULL || message->raw_message == NULL) {
+        ((char *)indata)[0] = '\0';
+        return;
+    }
+    if (warningLen + 4 >= maxLen) {
+        snprintf((char *)indata, maxLen, "%.*s", (int)(maxLen - 1), "...");
+    } else if (strlen(message->raw_message) + warningLen >= maxLen) {
+        snprintf((char *)indata, maxLen, "%.*s...", (int)(maxLen - warningLen - 4), message->raw_message);
     } else {
-        snprintf((char *)indata, maxLen, "%s%s", message->raw_message, "\n#F5C131 The data is not parseable. Please#\n#F5C131 refer to the software wallet interface#\n#F5C131 for viewing.#");
+        snprintf((char *)indata, maxLen, "%s%s", message->raw_message, warning);
     }
 }
 
@@ -1290,7 +1315,7 @@ static lv_obj_t *CreateEthOverviewValueView(lv_obj_t *parent, DisplayETH *eth, l
     lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 16);
     lv_obj_set_style_text_opa(label, LV_OPA_64, LV_PART_MAIN);
 
-    label = GuiCreateLittleTitleLabel(container, value);
+    label = GuiCreateLabelWithFont(container, value, GetOverviewAmountFont(value));
     lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 50);
     lv_obj_set_width(label, ETH_COMPONENT_CONTENT_WIDTH);
     lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
@@ -1304,7 +1329,7 @@ static lv_obj_t *CreateEthOverviewValueView(lv_obj_t *parent, DisplayETH *eth, l
     }
 
     GetEthTxFee(value, eth, sizeof(value));
-    nextY = CreateEthOverviewValueRow(container, _("MaxTxnFee"), value, nextY);
+    nextY = CreateEthOverviewValueRow(container, _("Max Txn Fee"), value, nextY);
     lv_obj_set_height(container, nextY + 8);
     lv_obj_update_layout(container);
     return container;
@@ -1502,29 +1527,30 @@ static lv_obj_t *CreateEthDetailsFeeView(lv_obj_t *parent, DisplayETH *eth, lv_o
 
     if (feeMarket) {
         GetEthMaxFee(value, eth, sizeof(value));
-        y = CreateEthDetailsPair(container, _("MaxFee"), value, y, false);
-        y = CreateEthDetailsDescription(container, _("·MaxFeePrice*GasLimit"), y, NULL);
+        y = CreateEthDetailsPair(container, _("Max Fee"), value, y, false);
+        y = CreateEthDetailsDescription(
+            container, "  ·  Max Fee Price * Gas Limit", y, NULL);
 
         GetEthMaxPriority(value, eth, sizeof(value));
-        y = CreateEthDetailsPair(container, _("MaxPriority"), value, y, false);
+        y = CreateEthDetailsPair(container, _("Max Priority Fee"), value, y, false);
         y = CreateEthDetailsDescription(
-            container, _("·MaxPriorityFeePrice*GasLimit"), y, NULL);
+            container, "  ·  Max Priority Fee Price * Gas Limit", y, NULL);
 
         GetEthMaxFeePrice(value, eth, sizeof(value));
-        y = CreateEthDetailsPair(container, _("MaxFeePrice"), value, y, false);
+        y = CreateEthDetailsPair(container, _("Max Fee Price"), value, y, false);
         GetEthMaxPriorityFeePrice(value, eth, sizeof(value));
-        y = CreateEthDetailsPair(container, _("MaxPriorityFeePrice"), value, y, false);
-        y = CreateEthDetailsPair(container, _("GasLimit"), eth->overview->gas_limit, y, false);
+        y = CreateEthDetailsPair(container, _("Max Priority Fee Price"), value, y, false);
+        y = CreateEthDetailsPair(container, _("Gas Limit"), eth->overview->gas_limit, y, false);
     } else {
         GetEthTxFee(value, eth, sizeof(value));
-        y = CreateEthDetailsPair(container, _("MaxTxnFee"), value, y, false);
+        y = CreateEthDetailsPair(container, _("Max Txn Fee"), value, y, false);
         y = CreateEthDetailsDescription(
-            container, "  \xE2\x80\xA2  Max Txn Fee = Gas Price * Gas Limit", y,
+            container, "  ·  Max Txn Fee = Gas Price * Gas Limit", y,
             &openSansDesc);
         y = CreateEthDetailsPair(
-            container, _("GasPrice"), eth->overview->gas_price, y, false);
+            container, _("Gas Price"), eth->overview->gas_price, y, false);
         y = CreateEthDetailsPair(
-            container, _("GasLimit"), eth->overview->gas_limit, y, false);
+            container, _("Gas Limit"), eth->overview->gas_limit, y, false);
     }
     lv_obj_set_height(container, y + 8);
     return container;
