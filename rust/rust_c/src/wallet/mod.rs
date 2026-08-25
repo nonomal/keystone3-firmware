@@ -1,18 +1,23 @@
 pub mod btc_only_wallet;
 pub use btc_only_wallet::*;
+#[cfg(feature = "multi-coins")]
+pub mod babylon;
 #[cfg(feature = "cypherpunk")]
 pub mod cypherpunk_wallet;
 #[cfg(feature = "multi-coins")]
 pub mod multi_coins_wallet;
 mod structs;
 
+use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
+use bitcoin::bip32::DerivationPath;
+use core::slice;
+use core::str::FromStr;
 
-use app_wallets::metamask::ETHAccountTypeApp;
-use app_wallets::DEVICE_TYPE;
+use app_wallets::{generate_crypto_multi_accounts_sync_ur, DEVICE_TYPE};
 use cty::uint32_t;
 use keystore::algorithms::secp256k1::derive_extend_public_key;
 use keystore::errors::KeystoreError;
@@ -30,7 +35,7 @@ use crate::common::errors::RustCError;
 use crate::common::ffi::CSliceFFI;
 use crate::common::structs::{ExtendedPublicKey, Response};
 use crate::common::types::{Ptr, PtrBytes, PtrString, PtrT, PtrUR};
-use crate::common::ur::{UREncodeResult, FRAGMENT_MAX_LENGTH_DEFAULT, FRAGMENT_UNLIMITED_LENGTH};
+use crate::common::ur::{UREncodeResult, FRAGMENT_MAX_LENGTH_DEFAULT};
 use crate::common::utils::{recover_c_array, recover_c_char};
 use crate::{extract_array, extract_ptr_with_type};
 use structs::QRHardwareCallData;
@@ -46,72 +51,58 @@ pub unsafe extern "C" fn parse_qr_hardware_call(ur: PtrUR) -> Ptr<Response<QRHar
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn check_hardware_call_path(
-    path: PtrString,
-    chain_type: PtrString,
-) -> *mut Response<bool> {
-    let chain_type_str = recover_c_char(chain_type);
-    let prefix = match chain_type_str.as_str() {
-        "BTC_LEGACY" => "m/44'/0'",
-        "BTC_NATIVE_SEGWIT" => "m/84'",
-        "BTC_TAPROOT" => "m/86'",
-        "BTC" => "m/49'",
-        "ETH" => "m/44'/60'",
-        "SOL" => "m/44'/501'",
-        "XRP" => "m/44'/144'",
-        "ADA" => "m/1852'/1815'",
-        "ADA_CIP_1853" => "m/1853'/1815'",
-        "ADA_CIP_1854" => "m/1854'/1815'",
-        "TRX" => "m/44'/195'",
-        "LTC" => "m/49'/2'",
-        "BCH" => "m/44'/145'",
-        "APT" => "m/44'/637'",
-        "SUI" => "m/44'/784'",
-        "DASH" => "m/44'/5'",
-        "AR" => "m/44'/472'",
-        "XLM" => "m/44'/148'",
-        "TIA" => "m/44'/118'",
-        "ATOM" => "m/44'/118'",
-        "DYM" => "m/44'/118'",
-        "OSMO" => "m/44'/118'",
-        "INJ" => "m/44'/60'",
-        "CRO" => "m/44'/394'",
-        "KAVA" => "m/44'/459'",
-        "LUNC" => "m/44'/330'",
-        "AXL" => "m/44'/118'",
-        "LUNA" => "m/44'/330'",
-        "AKT" => "m/44'/118'",
-        "STRD" => "m/44'/118'",
-        "SCRT" => "m/44'/529'",
-        "BLD" => "m/44'/564'",
-        "CTK" => "m/44'/118'",
-        "EVMOS" => "m/44'/60'",
-        "STARS" => "m/44'/118'",
-        "XPRT" => "m/44'/118'",
-        "SOMM" => "m/44'/118'",
-        "JUNO" => "m/44'/118'",
-        "IRIS" => "m/44'/118'",
-        "DVPN" => "m/44'/118'",
-        "ROWAN" => "m/44'/118'",
-        "REGEN" => "m/44'/118'",
-        "BOOT" => "m/44'/118'",
-        "GRAV" => "m/44'/118'",
-        "IXO" => "m/44'/118'",
-        "NGM" => "m/44'/118'",
-        "IOV" => "m/44'/234'",
-        "UMEE" => "m/44'/118'",
-        "QCK" => "m/44'/118'",
-        "TGD" => "m/44'/118'",
-        "THOR" => "m/44'/931'",
-        "IOTA" => "m/44'/4218'",
-        _ => return Response::success(false).c_ptr(),
-    };
+pub unsafe extern "C" fn check_hardware_call_path(path: PtrString) -> *mut Response<bool> {
     let mut path = recover_c_char(path).to_lowercase();
     if !path.starts_with('m') {
         path = format!("m/{path}");
     }
-    let result = path.starts_with(prefix);
-    Response::success(result).c_ptr()
+    if DerivationPath::from_str(path.as_str()).is_err() {
+        return Response::success(false).c_ptr();
+    }
+
+    Response::success(is_supported_hardware_call_path(path.as_str())).c_ptr()
+}
+
+fn is_supported_hardware_call_path(path: &str) -> bool {
+    const SUPPORTED_PATH_PREFIXES: &[&str] = &[
+        "m/44'/0'",
+        "m/84'",
+        "m/86'",
+        "m/49'",
+        "m/44'/60'",
+        "m/44'/501'",
+        "m/44'/144'",
+        "m/1852'/1815'",
+        "m/1853'/1815'",
+        "m/1854'/1815'",
+        "m/44'/195'",
+        "m/44'/145'",
+        "m/44'/637'",
+        "m/44'/784'",
+        "m/44'/5'",
+        "m/44'/472'",
+        "m/44'/148'",
+        "m/44'/118'",
+        "m/44'/394'",
+        "m/44'/459'",
+        "m/44'/330'",
+        "m/44'/529'",
+        "m/44'/564'",
+        "m/44'/234'",
+        "m/44'/931'",
+        "m/44'/4218'",
+    ];
+
+    SUPPORTED_PATH_PREFIXES
+        .iter()
+        .any(|prefix| path_matches_prefix(path, prefix))
+}
+
+fn path_matches_prefix(path: &str, prefix: &str) -> bool {
+    path == prefix
+        || path
+            .strip_prefix(prefix)
+            .map_or(false, |suffix| suffix.starts_with('/'))
 }
 
 #[no_mangle]
@@ -216,5 +207,62 @@ pub unsafe extern "C" fn generate_key_derivation_ur(
                 .c_ptr()
         }
         Err(_e) => UREncodeResult::from(_e).c_ptr(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn generate_common_crypto_multi_accounts_ur(
+    master_fingerprint: PtrBytes,
+    master_fingerprint_length: u32,
+    public_keys: Ptr<CSliceFFI<ExtendedPublicKey>>,
+    account_prefix: PtrString,
+) -> Ptr<UREncodeResult> {
+    if master_fingerprint_length != 4 {
+        return UREncodeResult::from(URError::UrEncodeError(format!(
+            "master fingerprint length must be 4, current is {master_fingerprint_length}"
+        )))
+        .c_ptr();
+    }
+    let account_prefix = recover_c_char(account_prefix);
+    unsafe {
+        let mfp = slice::from_raw_parts(master_fingerprint, master_fingerprint_length as usize);
+        let public_keys = recover_c_array(public_keys);
+        let master_fingerprint = bitcoin::bip32::Fingerprint::from_str(hex::encode(mfp).as_str())
+            .map_err(|_e| RustCError::InvalidMasterFingerprint);
+        match master_fingerprint {
+            Ok(fp) => {
+                let mut keys = BTreeMap::new();
+                for x in public_keys {
+                    let pubkey = recover_c_char(x.xpub);
+                    let path = recover_c_char(x.path);
+                    match DerivationPath::from_str(path.to_lowercase().as_str()) {
+                        Ok(path) => {
+                            keys.insert(path, pubkey);
+                        }
+                        Err(_e) => {
+                            return UREncodeResult::from(RustCError::InvalidHDPath).c_ptr();
+                        }
+                    }
+                }
+                let result = generate_crypto_multi_accounts_sync_ur(
+                    fp.as_ref(),
+                    keys,
+                    account_prefix.as_str(),
+                );
+                match result.map(|v| v.try_into()) {
+                    Ok(v) => match v {
+                        Ok(data) => UREncodeResult::encode(
+                            data,
+                            CryptoMultiAccounts::get_registry_type().get_type(),
+                            FRAGMENT_MAX_LENGTH_DEFAULT,
+                        )
+                        .c_ptr(),
+                        Err(e) => UREncodeResult::from(e).c_ptr(),
+                    },
+                    Err(e) => UREncodeResult::from(e).c_ptr(),
+                }
+            }
+            Err(e) => UREncodeResult::from(e).c_ptr(),
+        }
     }
 }

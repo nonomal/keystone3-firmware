@@ -1,7 +1,9 @@
 #include "simulator_model.h"
 #include "librust_c.h"
 #include "gui.h"
+#include "gui_framework.h"
 #include "gui_home_widgets.h"
+#include "gui_views.h"
 #include "cjson/cJSON.h"
 #include "stdint.h"
 #include "gui_resolve_ur.h"
@@ -25,6 +27,11 @@ bool g_otpProtect = false;
 
 void OTP_PowerOn(void)
 {
+}
+
+bool NeedUpdateBoot(void)
+{
+    return false;
 }
 
 void StampTimeToUtcTime(int64_t timeStamp, char *utcTime, int maxLen)
@@ -63,10 +70,11 @@ void NftLockDecodeTouchQuit()
 
 int32_t GetUpdatePubKey(uint8_t *pubKey)
 {
-    sprintf(pubKey, "%02x", 0x4);
+    pubKey[0] = 0x04;
     for (int i = 1; i < 65; i++) {
-        sprintf(&pubKey[i], "%02x", i);
+        pubKey[i] = (uint8_t)i;
     }
+    return 0;
 }
 
 void TrngGet(void *buf, uint32_t len)
@@ -197,6 +205,11 @@ uint16_t GetCurrentUSParsingRequestID()
 #ifndef BTC_ONLY
 void HandleURResultViaUSBFunc(const void *data, uint32_t data_len, uint16_t requestID, StatusEnum status)
 {
+}
+
+void HandleURResultViaUSBAsyncFunc(const void *data, uint32_t data_len, uint16_t requestID, StatusEnum status)
+{
+    HandleURResultViaUSBFunc(data, data_len, requestID, status);
 }
 #endif
 
@@ -438,6 +451,26 @@ static uint8_t buffer[100 * 1024];
 static char *qrcode[3000];
 static uint32_t qrcode_size;
 
+static bool store_qrcode_line(uint32_t index, const uint8_t *data, size_t length)
+{
+    if (index >= sizeof(qrcode) / sizeof(qrcode[0])) {
+        return false;
+    }
+    if (length > 0 && data[length - 1] == '\r') {
+        length--;
+    }
+    if (qrcode[index] != NULL) {
+        free(qrcode[index]);
+    }
+    qrcode[index] = malloc(length + 1);
+    if (qrcode[index] == NULL) {
+        return false;
+    }
+    memcpy(qrcode[index], data, length);
+    qrcode[index][length] = '\0';
+    return true;
+}
+
 char *FatfsFileRead(const char *path)
 {
     int32_t readBytes = 0;
@@ -519,34 +552,26 @@ int32_t prepare_qrcode()
 
     for (size_t i = 0; i < readBytes; i++) {
         if (buffer[i] == '\n') {
-            if (qrcode[lastQRIndex] != NULL) {
-                free(qrcode[lastQRIndex]);
+            if (!store_qrcode_line(lastQRIndex, buffer + lastIndex, i - lastIndex)) {
+                return -1;
             }
-            qrcode[lastQRIndex] = malloc(1024);
-            memset(qrcode[lastQRIndex], '\0', 1024);
-            memcpy(qrcode[lastQRIndex], buffer + lastIndex, i - lastIndex);
-            // printf("qrcode: %s\r\n", qrcode[lastQRIndex]);
             lastIndex = i + 1;
             lastQRIndex++;
         }
-        if (i == readBytes - 1) {
-            // printf("last char: %c\r\n", buffer[i]);
-            if (qrcode[lastQRIndex] != NULL) {
-                free(qrcode[lastQRIndex]);
-            }
-            qrcode[lastQRIndex] = malloc(1024);
-            memset(qrcode[lastQRIndex], '\0', 1024);
-            memcpy(qrcode[lastQRIndex], buffer + lastIndex, i - lastIndex + 1);
-            // printf("qrcode: %s\r\n", qrcode[lastQRIndex]);
-            qrcode_size = lastQRIndex + 1;
-        }
     }
-    // printf("read: %d\r\n", readBytes);
+    if (lastIndex < readBytes) {
+        if (!store_qrcode_line(lastQRIndex, buffer + lastIndex, readBytes - lastIndex)) {
+            return -1;
+        }
+        lastQRIndex++;
+    }
+    qrcode_size = lastQRIndex;
 
     return readBytes;
 }
 
 #ifdef GET_QR_DATA_FROM_SCREEN
+#define SCREEN_QR_MAX_LOOP_COUNT 512
 static struct URParseResult *urResult;
 static UrViewType_t viewType;
 static bool firstQrFlag = true;
@@ -554,6 +579,10 @@ static PtrDecoder decoder = NULL;
 
 static void reset_qr_state()
 {
+    if (urResult != NULL) {
+        free_ur_parse_result(urResult);
+        urResult = NULL;
+    }
     firstQrFlag = true;
     decoder = NULL;
 }
@@ -578,6 +607,7 @@ static bool on_qr_detected(const char *qrString)
                 viewType.viewType = urResult->t;
                 viewType.urType = urResult->ur_type;
                 handleURResult(urResult, NULL, viewType, false);
+                urResult = NULL;
                 return true;
             } else {
                 // first qr code
@@ -593,12 +623,16 @@ static bool on_qr_detected(const char *qrString)
                 viewType.viewType = MultiurResult->t;
                 viewType.urType = MultiurResult->ur_type;
                 printf("MultiurResult->t: %u\n", MultiurResult->t);
+                free_ur_parse_result(urResult);
+                urResult = NULL;
+                decoder = NULL;
                 handleURResult(NULL, MultiurResult, viewType, true);
                 return true;
             }
         } else {
             printf("error code: %d\r\n", MultiurResult->error_code);
             printf("error message: %s\r\n", MultiurResult->error_message);
+            free_ur_parse_multi_result(MultiurResult);
             return true;
         }
         if (!(MultiurResult->is_complete)) {
@@ -611,16 +645,19 @@ static bool on_qr_detected(const char *qrString)
 
 int32_t read_qrcode()
 {
-    read_qr_code_from_screen(on_qr_detected, 64);
+    reset_qr_state();
+    read_qr_code_from_screen(on_qr_detected, SCREEN_QR_MAX_LOOP_COUNT);
+    reset_qr_state();
     return 0;
 }
 #else
 int32_t read_qrcode()
 {
     UrViewType_t viewType;
-    uint32_t readLen = prepare_qrcode();
-    if (readLen == 0)
-        return 0;
+    int32_t readLen = prepare_qrcode();
+    if (readLen <= 0) {
+        return readLen;
+    }
     int i = 0;
     int loopTime = 0;
 
@@ -660,6 +697,13 @@ int32_t read_qrcode()
             firstQrFlag = false;
             decoder = urResult->decoder;
         }
+    }
+    else
+    {
+        printf("error code: %d\r\n", urResult->error_code);
+        printf("error message: %s\r\n", urResult->error_message);
+        free_ur_parse_result(urResult);
+        return -1;
     }
 
     printf("qrcode_size: %d\r\n", qrcode_size);

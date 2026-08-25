@@ -1,5 +1,7 @@
 #include "gui_ar.h"
 #include "gui_chain_components.h"
+#include "rsa.h"
+#include "user_utils.h"
 
 static bool g_isMulti = false;
 static URParseResult *g_urResult = NULL;
@@ -7,6 +9,10 @@ static URParseMultiResult *g_urMultiResult = NULL;
 static ArweaveRequestType g_requestType = ArweaveRequestTypeTransaction;
 static void *g_parseResult = NULL;
 static bool g_isAoTransfer = false;
+
+#define ARWEAVE_XPUB_HEX_LEN 1024
+#define AR_COMPONENT_WIDTH 376
+#define AR_COMPONENT_CONTENT_WIDTH (AR_COMPONENT_WIDTH - 48)
 
 #define CHECK_FREE_PARSE_RESULT(result)                                                                                           \
     if (result != NULL)                                                                                                           \
@@ -26,8 +32,10 @@ static bool g_isAoTransfer = false;
     }
 
 static void ParseRequestType();
-static void SetTitleLabelStyle(lv_obj_t *label);
-static void TagsRender(cJSON *root, int size, lv_obj_t *parent);
+static void GuiArPrepareComponentParent(lv_obj_t *parent, uint16_t height);
+static lv_obj_t *GuiArCreatePagedMessageView(lv_obj_t *parent, const char *title, const char *value, bool utf8, lv_obj_t *lastView);
+static lv_obj_t *GuiArCreateTxDetailSummary(lv_obj_t *parent, DisplayArweaveTx *txData);
+static void GuiArCreateTxTagsCard(lv_obj_t *parent, cJSON *root, lv_obj_t *lastView);
 
 static void ParseRequestType()
 {
@@ -39,52 +47,10 @@ static void ParseRequestType()
     g_requestType = *requestType->data;
 }
 
-static void SetTitleLabelStyle(lv_obj_t *label)
-{
-    lv_obj_set_style_text_font(label, g_defIllustrateFont, LV_PART_MAIN);
-    lv_obj_set_style_text_color(label, WHITE_COLOR, LV_PART_MAIN);
-    lv_obj_set_style_text_opa(label, 144, LV_PART_MAIN | LV_STATE_DEFAULT);
-}
-
-static void TagsRender(cJSON *root, int size, lv_obj_t *parent)
-{
-    int height = 62 + 84 * size;
-    for (int i = 0; i < size; i++) {
-        cJSON *item = cJSON_GetArrayItem(root, i);
-        cJSON *key = cJSON_GetObjectItem(item, "name");
-        cJSON *value = cJSON_GetObjectItem(item, "value");
-        if (key == NULL || value == NULL) {
-            continue;
-        }
-        lv_obj_t *keyLabel = lv_label_create(parent);
-        lv_label_set_text(keyLabel, "Name");
-        SetTitleLabelStyle(keyLabel);
-        lv_obj_align(keyLabel, LV_ALIGN_TOP_LEFT, 24, 62 + 84 * i);
-
-        lv_obj_t *keyValueLabel = lv_label_create(parent);
-        lv_label_set_text(keyValueLabel, key->valuestring);
-        lv_obj_set_style_text_font(keyValueLabel, g_defIllustrateFont, LV_PART_MAIN);
-        lv_obj_set_style_text_color(keyValueLabel, lv_color_hex(16090890), LV_PART_MAIN);
-        lv_obj_align(keyValueLabel, LV_ALIGN_TOP_LEFT, 96, 62 + 84 * i);
-
-        lv_obj_t *valueLabel = lv_label_create(parent);
-        lv_label_set_text(valueLabel, "Value");
-        SetTitleLabelStyle(valueLabel);
-        lv_obj_align(valueLabel, LV_ALIGN_TOP_LEFT, 24, 62 + 84 * i + 38);
-
-        lv_obj_t *valueValueLabel = lv_label_create(parent);
-        lv_label_set_text(valueValueLabel, value->valuestring);
-        lv_obj_set_style_text_font(valueValueLabel, g_defIllustrateFont, LV_PART_MAIN);
-        lv_obj_set_style_text_color(valueValueLabel, WHITE_COLOR, LV_PART_MAIN);
-        lv_obj_align(valueValueLabel, LV_ALIGN_TOP_LEFT, 96, 62 + 84 * i + 38);
-    }
-    lv_obj_set_size(parent, 408, height);
-}
-
 bool IsArweaveSetupComplete(void)
 {
     char *xPub = GetCurrentAccountPublicKey(XPUB_TYPE_ARWEAVE);
-    return xPub != NULL && strlen(xPub) == 1024;
+    return IsHexStringWithLen(xPub, ARWEAVE_XPUB_HEX_LEN);
 }
 
 PtrT_TransactionCheckResult GuiGetArCheckResult(void)
@@ -95,91 +61,24 @@ PtrT_TransactionCheckResult GuiGetArCheckResult(void)
     return ar_check_tx(data, mfp, sizeof(mfp));
 }
 
-void GetArweaveMessageText(void *indata, void *param, uint32_t maxLen)
-{
-    DisplayArweaveMessage *data = (DisplayArweaveMessage *)param;
-    if (data->message == NULL) {
-        return;
-    }
-    strcpy_s((char *)indata, maxLen, data->message);
-}
-
-void GetArweaveRawMessage(void *indata, void *param, uint32_t maxLen)
-{
-    DisplayArweaveMessage *data = (DisplayArweaveMessage *)param;
-    if (data->raw_message == NULL) {
-        return;
-    }
-    strcpy_s((char *)indata, maxLen, data->raw_message);
-}
-
-int GetArweaveRawMessageLength(void *param)
-{
-    DisplayArweaveMessage *data = (DisplayArweaveMessage *)param;
-    if (data->raw_message == NULL) {
-        return 0;
-    }
-    return strlen(data->raw_message) + 1;
-}
-
-int GetArweaveMessageLength(void *param)
-{
-    DisplayArweaveMessage *data = (DisplayArweaveMessage *)param;
-    if (data->message == NULL) {
-        return 0;
-    }
-    return strlen(data->message) + 1;
-
-}
-
-void GetArweaveMessageAddress(void *indata, void *param, uint32_t maxLen)
+static void GuiArGetMessageAddress(char *address, uint32_t maxLen)
 {
     char *xPub = GetCurrentAccountPublicKey(XPUB_TYPE_ARWEAVE);
+    ASSERT(xPub != NULL);
+
     SimpleResponse_c_char *result = arweave_get_address(xPub);
+    if (result == NULL) {
+        return;
+    }
+
     if (result->error_code == 0) {
         SimpleResponse_c_char *fixedAddress = fix_arweave_address(result->data);
         if (fixedAddress->error_code == 0) {
-            strcpy_s((char *)indata, maxLen, fixedAddress->data);
+            strcpy_s(address, maxLen, fixedAddress->data);
         }
         free_simple_response_c_char(fixedAddress);
     }
     free_simple_response_c_char(result);
-}
-
-void GetArweaveValue(void *indata, void *param, uint32_t maxLen)
-{
-    DisplayArweaveTx *tx = (DisplayArweaveTx *)param;
-    if (tx->value == NULL) {
-        return;
-    }
-    strcpy_s((char *)indata, maxLen, tx->value);
-}
-
-void GetArweaveFee(void *indata, void *param, uint32_t maxLen)
-{
-    DisplayArweaveTx *tx = (DisplayArweaveTx *)param;
-    if (tx->fee == NULL) {
-        return;
-    }
-    strcpy_s((char *)indata, maxLen, tx->fee);
-}
-
-void GetArweaveFromAddress(void *indata, void *param, uint32_t maxLen)
-{
-    DisplayArweaveTx *tx = (DisplayArweaveTx *)param;
-    if (tx->from == NULL) {
-        return;
-    }
-    strcpy_s((char *)indata, maxLen, tx->from);
-}
-
-void GetArweaveToAddress(void *indata, void *param, uint32_t maxLen)
-{
-    DisplayArweaveTx *tx = (DisplayArweaveTx *)param;
-    if (tx->to == NULL) {
-        return;
-    }
-    strcpy_s((char *)indata, maxLen, tx->to);
 }
 
 void GuiSetArUrData(URParseResult *urResult, URParseMultiResult *urMultiResult, bool multi)
@@ -233,42 +132,148 @@ void FreeArMemory(void)
     CHECK_FREE_PARSE_RESULT(g_parseResult);
 }
 
-void GuiShowArweaveTxDetail(lv_obj_t *parent, void *totalData)
+static void GuiArPrepareComponentParent(lv_obj_t *parent, uint16_t height)
 {
-    cJSON *root;
-    int size;
-    bool shouldShowContainer = true;
+    lv_obj_set_size(parent, AR_COMPONENT_WIDTH, height);
+    lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(parent, LV_OBJ_FLAG_CLICKABLE);
+}
+
+void GuiArTxOverview(lv_obj_t *parent, void *totalData)
+{
     DisplayArweaveTx *txData = (DisplayArweaveTx *)totalData;
-    PtrString txDetail = txData->detail;
-    if (txDetail == NULL) {
-        shouldShowContainer = false;
-    } else {
-        root = cJSON_Parse((const char *)txDetail);
-        size = cJSON_GetArraySize(root);
-        if (size <= 0) {
-            shouldShowContainer = false;
-        }
-    }
+    GuiArPrepareComponentParent(parent, 444);
 
-    if (!shouldShowContainer) {
-        lv_obj_add_flag(parent, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_t *lastView = CreateTransactionOverviewCardWithWidth(
+        parent,
+        _("Value"),
+        txData->value,
+        _("Fee"),
+        txData->fee,
+        AR_COMPONENT_WIDTH);
+    lastView = CreateTransactionItemViewWithWidth(parent, _("From"), txData->from, lastView, AR_COMPONENT_WIDTH);
+    CreateTransactionItemViewWithWidth(parent, _("Destination"), txData->to, lastView, AR_COMPONENT_WIDTH);
+}
+
+void GuiArTxDetails(lv_obj_t *parent, void *totalData)
+{
+    DisplayArweaveTx *txData = (DisplayArweaveTx *)totalData;
+    GuiArPrepareComponentParent(parent, 444);
+
+    lv_obj_t *lastView = GuiArCreateTxDetailSummary(parent, txData);
+
+    cJSON *root = txData->detail == NULL ? NULL : cJSON_Parse((const char *)txData->detail);
+    if (!cJSON_IsArray(root)) {
+        cJSON_Delete(root);
         return;
-    } else {
-        lv_obj_clear_flag(parent, LV_OBJ_FLAG_HIDDEN);
     }
 
-    lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(parent, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_bg_color(parent, WHITE_COLOR, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_radius(parent, 24, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_bg_opa(parent, 31, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_t *label = lv_label_create(parent);
-    lv_label_set_text(label, "#2");
-    lv_obj_set_style_text_font(label, g_defIllustrateFont, LV_PART_MAIN);
-    lv_obj_set_style_text_color(label, lv_color_hex(16090890), LV_PART_MAIN);
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 16);
+    GuiArCreateTxTagsCard(parent, root, lastView);
+    cJSON_Delete(root);
+}
 
-    TagsRender(root, size, parent);
+static lv_obj_t *GuiArCreateDetailLabel(lv_obj_t *parent, const char *text, int16_t x, int16_t y, lv_opa_t opa)
+{
+    lv_obj_t *label = GuiCreateIllustrateLabel(parent, text == NULL ? "" : text);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, x, y);
+    lv_obj_set_style_text_opa(label, opa, LV_PART_MAIN);
+    return label;
+}
+
+static lv_obj_t *GuiArCreateTxDetailSummary(lv_obj_t *parent, DisplayArweaveTx *txData)
+{
+    lv_obj_t *card = CreateRelativeTransactionContentContainer(parent, AR_COMPONENT_WIDTH, 358, NULL);
+    lv_obj_t *section = GuiArCreateDetailLabel(card, "#1", 24, 16, LV_OPA_COVER);
+    lv_obj_set_style_text_color(section, lv_color_hex(16090890), LV_PART_MAIN);
+
+    lv_obj_t *title = GuiArCreateDetailLabel(card, _("Value"), 24, 62, LV_OPA_64);
+    lv_obj_t *value = GuiArCreateDetailLabel(card, txData->value, 0, 62, LV_OPA_COVER);
+    lv_obj_set_style_text_color(value, lv_color_hex(16090890), LV_PART_MAIN);
+    lv_obj_align_to(value, title, LV_ALIGN_OUT_RIGHT_MID, 16, 0);
+
+    title = GuiArCreateDetailLabel(card, _("Fee"), 24, 100, LV_OPA_64);
+    value = GuiArCreateDetailLabel(card, txData->fee, 0, 100, LV_OPA_COVER);
+    lv_obj_align_to(value, title, LV_ALIGN_OUT_RIGHT_MID, 16, 0);
+
+    GuiArCreateDetailLabel(card, _("From"), 24, 138, LV_OPA_64);
+    value = GuiArCreateDetailLabel(card, txData->from, 24, 176, LV_OPA_COVER);
+    lv_obj_set_width(value, AR_COMPONENT_CONTENT_WIDTH);
+    lv_label_set_long_mode(value, LV_LABEL_LONG_WRAP);
+
+    GuiArCreateDetailLabel(card, _("To"), 24, 244, LV_OPA_64);
+    value = GuiArCreateDetailLabel(card, txData->to, 24, 282, LV_OPA_COVER);
+    lv_obj_set_width(value, AR_COMPONENT_CONTENT_WIDTH);
+    lv_label_set_long_mode(value, LV_LABEL_LONG_WRAP);
+    return card;
+}
+
+static void GuiArCreateTxTagsCard(lv_obj_t *parent, cJSON *root, lv_obj_t *lastView)
+{
+    int size = cJSON_GetArraySize(root);
+    if (size <= 0) {
+        return;
+    }
+
+    lv_obj_t *card = CreateRelativeTransactionContentContainer(parent, AR_COMPONENT_WIDTH, 62, lastView);
+    lv_obj_t *section = GuiArCreateDetailLabel(card, "#2", 24, 16, LV_OPA_COVER);
+    lv_obj_set_style_text_color(section, lv_color_hex(16090890), LV_PART_MAIN);
+    int16_t y = 62;
+
+    for (int i = 0; i < size; i++) {
+        cJSON *item = cJSON_GetArrayItem(root, i);
+        cJSON *name = cJSON_GetObjectItemCaseSensitive(item, "name");
+        cJSON *value = cJSON_GetObjectItemCaseSensitive(item, "value");
+        if (!cJSON_IsString(name) || !cJSON_IsString(value)) {
+            continue;
+        }
+
+        GuiArCreateDetailLabel(card, _("Name"), 24, y, LV_OPA_64);
+        lv_obj_t *text = GuiArCreateDetailLabel(card, name->valuestring, 96, y, LV_OPA_COVER);
+        lv_obj_set_style_text_color(text, lv_color_hex(16090890), LV_PART_MAIN);
+        lv_obj_set_width(text, AR_COMPONENT_WIDTH - 120);
+        lv_label_set_long_mode(text, LV_LABEL_LONG_WRAP);
+        lv_obj_update_layout(text);
+        y += LV_MAX(30, lv_obj_get_height(text)) + 8;
+
+        GuiArCreateDetailLabel(card, _("Value"), 24, y, LV_OPA_64);
+        text = GuiArCreateDetailLabel(card, value->valuestring, 96, y, LV_OPA_COVER);
+        lv_obj_set_width(text, AR_COMPONENT_WIDTH - 120);
+        lv_label_set_long_mode(text, LV_LABEL_LONG_WRAP);
+        lv_obj_update_layout(text);
+        y += LV_MAX(30, lv_obj_get_height(text)) + 16;
+    }
+
+    lv_obj_set_height(card, y);
+}
+
+static lv_obj_t *GuiArCreatePagedMessageView(lv_obj_t *parent, const char *title, const char *value, bool utf8, lv_obj_t *lastView)
+{
+    lv_obj_t *container = CreateRelativeTransactionContentContainer(parent, AR_COMPONENT_WIDTH, 420, lastView);
+
+    lv_obj_t *titleLabel = GuiCreateIllustrateLabel(container, title);
+    lv_obj_align(titleLabel, LV_ALIGN_TOP_LEFT, 24, 16);
+    lv_obj_set_style_text_color(titleLabel, lv_color_hex(16090890), LV_PART_MAIN);
+    lv_obj_set_style_text_opa(titleLabel, LV_OPA_COVER, LV_PART_MAIN);
+
+    lv_obj_t *content = GuiCreateContainerWithParent(container, AR_COMPONENT_CONTENT_WIDTH, 350);
+    lv_obj_align(content, LV_ALIGN_TOP_LEFT, 24, 54);
+    lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, LV_PART_MAIN);
+    GuiShowPagedMessageText(content, value, utf8, NULL, NULL);
+    return container;
+}
+
+void GuiArMessageOverview(lv_obj_t *parent, void *totalData)
+{
+    DisplayArweaveMessage *messageData = (DisplayArweaveMessage *)totalData;
+    GuiArPrepareComponentParent(parent, 542);
+
+    char address[128] = {0};
+    GuiArGetMessageAddress(address, sizeof(address));
+
+    lv_obj_t *lastView = NULL;
+    lastView = CreateTransactionItemViewWithWidth(parent, _("Address"), address, lastView, AR_COMPONENT_WIDTH);
+    lastView = GuiArCreatePagedMessageView(parent, _("Message (UTF-8)"), messageData->message, true, lastView);
+    GuiArCreatePagedMessageView(parent, _("Raw Message"), messageData->raw_message, false, lastView);
 }
 
 UREncodeResult *GuiGetArweaveSignQrCodeData(void)
@@ -276,17 +281,25 @@ UREncodeResult *GuiGetArweaveSignQrCodeData(void)
     bool enable = IsPreviousLockScreenEnable();
     SetLockScreen(false);
     UREncodeResult *encodeResult = NULL;
+    Rsa_primes_t *primes = NULL;
     void *data = g_isMulti ? g_urMultiResult->data : g_urResult->data;
     do {
-        Rsa_primes_t *primes = FlashReadRsaPrimes();
+        primes = FlashReadRsaPrimes();
         if (primes == NULL) {
-            encodeResult = NULL;
-            break;
+            printf("Failed to read RSA primes\n");
+            ASSERT(false);
         }
-        encodeResult = ar_sign_tx(data, primes->p, 256, primes->q, 256);
-        ClearSecretCache();
+        encodeResult = ar_sign_tx(data, primes->p, SPI_FLASH_RSA_PRIME_SIZE, primes->q, SPI_FLASH_RSA_PRIME_SIZE);
         CHECK_CHAIN_BREAK(encodeResult);
     } while (0);
+
+    if (primes) {
+        memset_s(primes->p, SPI_FLASH_RSA_PRIME_SIZE, 0, SPI_FLASH_RSA_PRIME_SIZE);
+        memset_s(primes->q, SPI_FLASH_RSA_PRIME_SIZE, 0, SPI_FLASH_RSA_PRIME_SIZE);
+        memset_s(primes, sizeof(Rsa_primes_t), 0, sizeof(Rsa_primes_t));
+        SRAM_FREE(primes);
+    }
+    ClearSecretCache();
     SetLockScreen(enable);
     return encodeResult;
 }
@@ -298,7 +311,7 @@ static void GuiArRenderDataItemDetail(lv_obj_t *parent, DisplayArweaveDataItem *
 
 void GuiArDataItemOverview(lv_obj_t *parent, void *totalData)
 {
-    lv_obj_set_size(parent, 408, 444);
+    lv_obj_set_size(parent, AR_COMPONENT_WIDTH, 444);
     lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(parent, LV_OBJ_FLAG_CLICKABLE);
     if (g_isAoTransfer) {
@@ -311,7 +324,7 @@ void GuiArDataItemOverview(lv_obj_t *parent, void *totalData)
 }
 void GuiArDataItemDetail(lv_obj_t *parent, void *totalData)
 {
-    lv_obj_set_size(parent, 408, 444);
+    lv_obj_set_size(parent, AR_COMPONENT_WIDTH, 444);
     lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(parent, LV_OBJ_FLAG_CLICKABLE);
     if (g_isAoTransfer) {
@@ -326,38 +339,38 @@ void GuiArDataItemDetail(lv_obj_t *parent, void *totalData)
 static void GuiArRenderAOTransferOverview(lv_obj_t *parent, DisplayArweaveAOTransfer *txData)
 {
     lv_obj_t *lastView = NULL;
-    lastView = CreateTransactionItemView(parent, _("Action"), _("AO Transfer"), lastView);
-    lastView = CreateTransactionItemView(parent, _("From"), txData->from, lastView);
-    lastView = CreateTransactionItemView(parent, _("Desination"), txData->to, lastView);
-    lastView = CreateTransactionItemView(parent, _("Quantity"), txData->quantity, lastView);
-    lastView = CreateTransactionItemView(parent, _("Token ID"), txData->token_id, lastView);
+    lastView = CreateTransactionItemViewWithWidth(parent, _("Action"), _("AO Transfer"), lastView, AR_COMPONENT_WIDTH);
+    lastView = CreateTransactionItemViewWithWidth(parent, _("From"), txData->from, lastView, AR_COMPONENT_WIDTH);
+    lastView = CreateTransactionItemViewWithWidth(parent, _("Destination"), txData->to, lastView, AR_COMPONENT_WIDTH);
+    lastView = CreateTransactionItemViewWithWidth(parent, _("Quantity"), txData->quantity, lastView, AR_COMPONENT_WIDTH);
+    lastView = CreateTransactionItemViewWithWidth(parent, _("Token ID"), txData->token_id, lastView, AR_COMPONENT_WIDTH);
 }
 
 static void GuiArRenderAOTransferDetail(lv_obj_t *parent, DisplayArweaveAOTransfer *txData)
 {
     lv_obj_t *lastView = NULL;
     for (size_t i = 0; i < txData->other_info->size; i++) {
-        lastView = CreateTransactionItemView(parent, txData->other_info->data[i].name, txData->other_info->data[i].value, lastView);
+        lastView = CreateTransactionItemViewWithWidth(parent, txData->other_info->data[i].name, txData->other_info->data[i].value, lastView, AR_COMPONENT_WIDTH);
     }
 }
 
 static void GuiArRenderDataItemOverview(lv_obj_t *parent, DisplayArweaveDataItem *txData)
 {
     lv_obj_t *lastView = NULL;
-    lastView = CreateTransactionItemView(parent, _("Action"), _("Sign DataItem"), lastView);
-    lastView = CreateTransactionItemView(parent, _("Owner"), txData->owner, lastView);
+    lastView = CreateTransactionItemViewWithWidth(parent, _("Action"), _("Sign DataItem"), lastView, AR_COMPONENT_WIDTH);
+    lastView = CreateTransactionItemViewWithWidth(parent, _("Owner"), txData->owner, lastView, AR_COMPONENT_WIDTH);
     if (txData->target != NULL) {
-        lastView = CreateTransactionItemView(parent, _("Target"), txData->target, lastView);
+        lastView = CreateTransactionItemViewWithWidth(parent, _("Target"), txData->target, lastView, AR_COMPONENT_WIDTH);
     }
     if (txData->anchor != NULL) {
-        lastView = CreateTransactionItemView(parent, _("Anchor"), txData->anchor, lastView);
+        lastView = CreateTransactionItemViewWithWidth(parent, _("Anchor"), txData->anchor, lastView, AR_COMPONENT_WIDTH);
     }
-    lastView = CreateTransactionItemView(parent, _("Data"), txData->data, lastView);
+    lastView = CreateTransactionItemViewWithWidth(parent, _("Data"), txData->data, lastView, AR_COMPONENT_WIDTH);
 }
 static void GuiArRenderDataItemDetail(lv_obj_t *parent, DisplayArweaveDataItem *txData)
 {
     lv_obj_t *lastView = NULL;
     for (size_t i = 0; i < txData->tags->size; i++) {
-        lastView = CreateTransactionItemView(parent, txData->tags->data[i].name, txData->tags->data[i].value, lastView);
+        lastView = CreateTransactionItemViewWithWidth(parent, txData->tags->data[i].name, txData->tags->data[i].value, lastView, AR_COMPONENT_WIDTH);
     }
 }

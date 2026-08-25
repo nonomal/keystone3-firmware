@@ -7,6 +7,8 @@ pub struct ProgramOverviewTransfer {
     pub main_action: String,
     pub from: String,
     pub to: String,
+    pub to_in_lookup_table: bool,
+    pub to_lookup_table_reference: String,
 }
 
 #[derive(Debug, Clone)]
@@ -19,6 +21,7 @@ pub struct ProgramOverviewSplTokenTransfer {
     pub token_mint_account: String,
     pub token_symbol: String,
     pub token_name: String,
+    pub unusual_decimals: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -30,8 +33,23 @@ pub struct ProgramOverviewVote {
 
 #[derive(Debug, Clone)]
 pub struct ProgramOverviewGeneral {
+    pub instruction_index: usize,
     pub program: String,
     pub method: String,
+    pub memo: String,
+    pub value: String,
+    pub from: String,
+    pub to: String,
+    pub amount: String,
+    pub source: String,
+    pub destination: String,
+    pub authority: String,
+    pub token: String,
+    pub mint: String,
+    pub unusual_decimals: bool,
+    pub decimals: u8,
+    pub to_in_lookup_table: bool,
+    pub to_lookup_table_reference: String,
 }
 
 #[derive(Debug, Clone)]
@@ -111,4 +129,16 @@ pub enum SolanaOverview {
     SquadsV4Proposal(Vec<ProgramOverviewProposal>),
     SplTokenTransfer(ProgramOverviewSplTokenTransfer),
     JupiterV6SwapOverview(JupiterV6SwapOverview),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_overview_uses_user_facing_description() {
+        let overview = ProgramOverviewUnknown::default();
+
+        assert_eq!(overview.description, "This transaction can not be decoded");
+    }
 }

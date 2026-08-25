@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 pub struct NotSupportMessage {
     pub type_url: String,
     pub err: String,
+    pub data_digest: String,
 }
 
 impl SerializeJson for NotSupportMessage {

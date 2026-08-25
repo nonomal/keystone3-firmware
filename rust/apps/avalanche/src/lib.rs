@@ -1,14 +1,13 @@
 #![no_std]
-#![feature(error_in_core)]
 
 #[allow(unused_imports)]
 #[macro_use]
 extern crate alloc;
-use alloc::{string::String, vec::Vec};
+use alloc::{string::ToString, vec::Vec};
 
 pub use address::get_address;
 use bytes::{Buf, Bytes};
-use transactions::tx_header::Header;
+use transactions::{structs::ParsedSizeAble, tx_header::Header};
 
 use crate::errors::{AvaxError, Result};
 use core::convert::TryFrom;
@@ -22,27 +21,31 @@ pub mod encode {
 mod address;
 pub mod network;
 mod ripple_keypair;
-pub struct PsbtSignStatus {
-    pub sign_status: Option<String>,
-    pub is_completed: bool,
-}
 
 use transactions::type_id::TypeId;
 
 pub fn parse_avax_tx<T>(data: Vec<u8>) -> Result<T>
 where
-    T: TryFrom<Bytes>,
+    T: TryFrom<Bytes> + ParsedSizeAble,
 {
+    let input_len = data.len();
     let bytes = Bytes::from(data);
     match T::try_from(bytes) {
-        Ok(data) => Ok(data),
-        Err(e) => Err(AvaxError::InvalidInput),
+        Ok(data) if data.parsed_size() == input_len => Ok(data),
+        Ok(_) => Err(AvaxError::InvalidTransaction(
+            "unexpected trailing data".to_string(),
+        )),
+        Err(_) => Err(AvaxError::InvalidInput),
     }
 }
 
 pub fn get_avax_tx_type_id(data: Vec<u8>) -> Result<TypeId> {
     let mut bytes = Bytes::from(data);
-    // codec_id 2 bytes
+    if bytes.remaining() < 6 {
+        return Err(AvaxError::InvalidTransaction(
+            "Insufficient data".to_string(),
+        ));
+    }
     bytes.advance(2);
     let type_id = TypeId::try_from(bytes.get_u32())?;
     Ok(type_id)

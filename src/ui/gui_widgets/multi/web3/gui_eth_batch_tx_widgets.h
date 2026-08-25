@@ -12,7 +12,7 @@ void GuiEthBatchTxWidgetsInit();
 void GuiEthBatchTxWidgetsDeInit();
 void GuiEthBatchTxWidgetsRefresh();
 void GuiEthBatchTxWidgetsVerifyPasswordSuccess();
-void GuiEthBatchTxWidgetsTransactionParseSuccess();
+void GuiEthBatchTxWidgetsTransactionParseSuccess(void *params);
 void GuiEthBatchTxWidgetsTransactionParseFail();
 void GuiCreateEthBatchTxWidget();
 void GuiSetEthBatchTxData(URParseResult *urResult, URParseMultiResult *urMultiResult, bool multi);

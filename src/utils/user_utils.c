@@ -1,7 +1,9 @@
 #include "user_utils.h"
 #include "define.h"
-#include "lvgl.h"
+#include "drv_trng.h"
 #include "user_memory.h"
+
+#define HEX_STRING_MAX_LENGTH 4096
 
 uint32_t StrToHex(uint8_t *pbDest, const char *pbSrc)
 {
@@ -78,6 +80,33 @@ bool CheckAllZero(const uint8_t *array, uint32_t len)
     return true;
 }
 
+bool IsHexStringWithLen(const char *value, size_t expectedLen)
+{
+    if (value == NULL) {
+        return false;
+    }
+    if (expectedLen >= HEX_STRING_MAX_LENGTH) {
+        return false;
+    }
+    size_t scanLen = expectedLen == 0 ? HEX_STRING_MAX_LENGTH : expectedLen + 1;
+    size_t len = strnlen_s(value, scanLen);
+    if (len == 0 || len == scanLen || (len % 2) != 0) {
+        return false;
+    }
+    if (expectedLen != 0 && len != expectedLen) {
+        return false;
+    }
+    for (size_t i = 0; i < len; i++) {
+        char c = value[i];
+        if (!((c >= '0' && c <= '9') ||
+                (c >= 'a' && c <= 'f') ||
+                (c >= 'A' && c <= 'F'))) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void RemoveFormatChar(char *str)
 {
 #ifndef COMPILE_SIMULATOR
@@ -138,7 +167,9 @@ void ArrayRandom(char *words, char *out, int count)
     }
 
     for (int i = 0; i < count - 1; ++i) {
-        int num = i + lv_rand(0, 2048) % (count - i);
+        uint32_t random;
+        TrngGet(&random, sizeof(random));
+        int num = i + random % (count - i);
         char *temp = pointerList[i];
         pointerList[i] = pointerList[num];
         pointerList[num] = temp;
@@ -161,6 +192,15 @@ void ConvertToLowerCase(char *str)
 {
     while (*str) {
         *str = tolower(*str);
+        str++;
+    }
+}
+
+void ConvertToUpperCase(char *str)
+{
+    if (str == NULL) return;
+    while (*str) {
+        *str = (char)toupper((unsigned char) * str);
         str++;
     }
 }

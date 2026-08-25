@@ -24,22 +24,63 @@ pub struct DisplaySolanaTx {
 
 #[repr(C)]
 pub struct DisplaySolanaTxOverviewGeneral {
+    pub instruction_index: usize,
     pub program: PtrString,
     pub method: PtrString,
+    pub memo: PtrString,
+    pub value: PtrString,
+    pub from: PtrString,
+    pub to: PtrString,
+    pub amount: PtrString,
+    pub source: PtrString,
+    pub destination: PtrString,
+    pub authority: PtrString,
+    pub token: PtrString,
+    pub mint: PtrString,
+    pub unusual_decimals: bool,
+    pub decimals: u8,
+    pub to_in_lookup_table: bool,
+    pub to_lookup_table_reference: PtrString,
 }
 
 impl Free for DisplaySolanaTxOverviewGeneral {
     unsafe fn free(&self) {
         free_str_ptr!(self.program);
         free_str_ptr!(self.method);
+        free_str_ptr!(self.memo);
+        free_str_ptr!(self.value);
+        free_str_ptr!(self.from);
+        free_str_ptr!(self.to);
+        free_str_ptr!(self.amount);
+        free_str_ptr!(self.source);
+        free_str_ptr!(self.destination);
+        free_str_ptr!(self.authority);
+        free_str_ptr!(self.token);
+        free_str_ptr!(self.mint);
+        free_str_ptr!(self.to_lookup_table_reference);
     }
 }
 
 impl From<&ProgramOverviewGeneral> for DisplaySolanaTxOverviewGeneral {
     fn from(value: &ProgramOverviewGeneral) -> Self {
         Self {
+            instruction_index: value.instruction_index,
             program: convert_c_char(value.program.to_string()),
             method: convert_c_char(value.method.to_string()),
+            memo: convert_c_char(value.memo.to_string()),
+            value: convert_c_char(value.value.to_string()),
+            from: convert_c_char(value.from.to_string()),
+            to: convert_c_char(value.to.to_string()),
+            amount: convert_c_char(value.amount.to_string()),
+            source: convert_c_char(value.source.to_string()),
+            destination: convert_c_char(value.destination.to_string()),
+            authority: convert_c_char(value.authority.to_string()),
+            token: convert_c_char(value.token.to_string()),
+            mint: convert_c_char(value.mint.to_string()),
+            unusual_decimals: value.unusual_decimals,
+            decimals: value.decimals,
+            to_in_lookup_table: value.to_in_lookup_table,
+            to_lookup_table_reference: convert_c_char(value.to_lookup_table_reference.to_string()),
         }
     }
 }
@@ -109,6 +150,7 @@ pub struct DisplaySolanaTxSplTokenTransferOverview {
     pub token_mint_account: PtrString,
     pub token_symbol: PtrString,
     pub token_name: PtrString,
+    pub unusual_decimals: bool,
 }
 impl_c_ptrs!(DisplaySolanaTxSplTokenTransferOverview);
 impl Free for DisplaySolanaTxSplTokenTransferOverview {
@@ -183,6 +225,8 @@ pub struct DisplaySolanaTxOverview {
     pub transfer_value: PtrString,
     pub transfer_from: PtrString,
     pub transfer_to: PtrString,
+    pub transfer_to_in_lookup_table: bool,
+    pub transfer_to_lookup_table_reference: PtrString,
     // vote
     pub votes_on: PtrT<VecFFI<DisplaySolanaTxOverviewVotesOn>>,
     pub vote_account: PtrString,
@@ -190,6 +234,8 @@ pub struct DisplaySolanaTxOverview {
     pub general: PtrT<VecFFI<DisplaySolanaTxOverviewGeneral>>,
     // instructions
     pub unknown_instructions: PtrT<DisplaySolanaTxOverviewUnknownInstructions>,
+    // Unknown programs appended after a successfully parsed primary overview.
+    pub additional_unknown_programs: PtrT<VecFFI<PtrString>>,
 
     // squads_v4
     pub squads_multisig_create: PtrT<DisplaySolanaTxOverviewSquadsV4MultisigCreate>,
@@ -278,10 +324,13 @@ impl Default for DisplaySolanaTxOverview {
             main_action: null_mut(),
             transfer_from: null_mut(),
             transfer_to: null_mut(),
+            transfer_to_in_lookup_table: false,
+            transfer_to_lookup_table_reference: null_mut(),
             votes_on: null_mut(),
             vote_account: null_mut(),
             general: null_mut(),
             unknown_instructions: null_mut(),
+            additional_unknown_programs: null_mut(),
             squads_multisig_create: null_mut(),
             squads_proposal: null_mut(),
             spl_token_transfer: null_mut(),
@@ -305,6 +354,7 @@ impl Free for DisplaySolanaTxOverview {
         free_str_ptr!(self.transfer_value);
         free_str_ptr!(self.transfer_from);
         free_str_ptr!(self.transfer_to);
+        free_str_ptr!(self.transfer_to_lookup_table_reference);
         free_str_ptr!(self.vote_account);
         if !self.general.is_null() {
             let x = Box::from_raw(self.general);
@@ -324,6 +374,11 @@ impl Free for DisplaySolanaTxOverview {
         if !self.unknown_instructions.is_null() {
             let x = Box::from_raw(self.unknown_instructions);
             x.free();
+        }
+        if !self.additional_unknown_programs.is_null() {
+            let value = Box::from_raw(self.additional_unknown_programs);
+            let programs = Vec::from_raw_parts(value.data, value.size, value.cap);
+            programs.iter().for_each(|program| free_str_ptr!(*program));
         }
         if !self.squads_multisig_create.is_null() {
             let x = Box::from_raw(self.squads_multisig_create);
@@ -346,9 +401,30 @@ impl Free for DisplaySolanaTxOverview {
 
 impl From<ParsedSolanaTx> for DisplaySolanaTx {
     fn from(value: ParsedSolanaTx) -> Self {
+        let mut overview = DisplaySolanaTxOverview::from(&value);
+        if !value.additional_overviews.is_empty() {
+            overview.general = VecFFI::from(
+                value
+                    .additional_overviews
+                    .iter()
+                    .map(DisplaySolanaTxOverviewGeneral::from)
+                    .collect_vec(),
+            )
+            .c_ptr();
+        }
+        if !value.unknown_programs.is_empty() {
+            overview.additional_unknown_programs = VecFFI::from(
+                value
+                    .unknown_programs
+                    .iter()
+                    .map(|program| convert_c_char(program.to_string()))
+                    .collect_vec(),
+            )
+            .c_ptr();
+        }
         DisplaySolanaTx {
             network: convert_c_char(value.network.to_string()),
-            overview: DisplaySolanaTxOverview::from(&value).c_ptr(),
+            overview: overview.c_ptr(),
             detail: convert_c_char(value.detail),
         }
     }
@@ -367,6 +443,10 @@ impl From<&ParsedSolanaTx> for DisplaySolanaTxOverview {
                         main_action: convert_c_char(overview.main_action.to_string()),
                         transfer_from: convert_c_char(overview.from.to_string()),
                         transfer_to: convert_c_char(overview.to.to_string()),
+                        transfer_to_in_lookup_table: overview.to_in_lookup_table,
+                        transfer_to_lookup_table_reference: convert_c_char(
+                            overview.to_lookup_table_reference.to_string(),
+                        ),
                         ..DisplaySolanaTxOverview::default()
                     };
                 }
@@ -386,6 +466,7 @@ impl From<&ParsedSolanaTx> for DisplaySolanaTxOverview {
                             ),
                             token_symbol: convert_c_char(overview.token_symbol.to_string()),
                             token_name: convert_c_char(overview.token_name.to_string()),
+                            unusual_decimals: overview.unusual_decimals,
                         }
                         .c_ptr(),
                         ..DisplaySolanaTxOverview::default()

@@ -6,6 +6,7 @@
 #include "gui_hintbox.h"
 #include "gui_create_wallet_widgets.h"
 #include "gui_model.h"
+#include "se_manager.h"
 #include "secret_cache.h"
 #include "user_memory.h"
 #include "gui_enter_passcode.h"
@@ -43,9 +44,6 @@ static void GuiRefreshNavBar(void);
 static void CloseChangeEntropyHandler(lv_event_t *e);
 static void OpenChangeEntropyTutorialHandler(lv_event_t *e);
 static void PassphraseButtonHandler(lv_event_t *e);
-#ifdef WEB3_VERSION
-static void TonPhraseButtonHandler(lv_event_t *e);
-#endif
 
 static PageWidget_t *g_pageWidget;
 static KeyBoard_t *g_nameWalletKb = NULL;
@@ -241,7 +239,7 @@ static void GuiCreateBackupWidget(lv_obj_t *parent, bool enablePassphrase)
         {.obj = labelNotice, .align = LV_ALIGN_DEFAULT, .position = {24, 62}},
         {.obj = GuiCreateImg(parent, &imgArrowRight), .align = LV_ALIGN_DEFAULT, .position = {372, 16}},
     };
-    lv_obj_t *importButton = GuiCreateButton(parent, 432, 136, importTable, 3, OpenSecretShareHandler, NULL);
+    lv_obj_t *importButton = GuiCreateButton(parent, 432, 146, importTable, 3, OpenSecretShareHandler, NULL);
     lv_obj_align_to(importButton, button, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 10);
 
     lv_obj_t *obj = GuiCreateContainerWithParent(parent, 222, 30);
@@ -329,6 +327,7 @@ static void GuiImportBackupWidget(lv_obj_t *parent, bool enablePassphrase)
 
 void GuiCreateWalletInit(uint8_t walletMethod)
 {
+    GuiResetCheckPasswordCounter();     // reset the per-flow password-check try counter
     CLEAR_OBJECT(g_createWalletTileView);
     g_selectedEntropyMethod = ENTROPY_TYPE_STANDARD;
 
@@ -362,6 +361,12 @@ void GuiCreateWalletInit(uint8_t walletMethod)
 
     lv_obj_set_tile_id(g_createWalletTileView.tileView, g_createWalletTileView.currentTile, 0, LV_ANIM_OFF);
     lv_obj_clear_flag(tileView, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Hold the auto-lock off for the whole create/add-wallet flow: the user pauses here for minutes to write
+    // down the mnemonic, and an inactivity auto-lock mid-flow tears down this view (DeInit) and logs the user
+    // out, which aborts the in-progress add-wallet operation. Re-enabled in GuiCreateWalletDeInit so it can
+    // never stay stuck off.
+    SetPageLockScreen(false);
 }
 
 int8_t GuiCreateWalletNextTile(void)
@@ -467,6 +472,22 @@ void GuiCreateWalletDeInit(void)
     g_createWalletTileView.currentTile = 0;
     CLEAR_OBJECT(g_createWalletTileView);
     ClearSecretCache();
+    // Re-enable the auto-lock disabled in GuiCreateWalletInit — but ONLY when no add-wallet provision is
+    // pending. In add-wallet this view is a re-openable sub-step under the notice tile, which OWNS the page-lock
+    // hold for the whole operation. SetPageLockScreen is a plain bool (not refcounted), so blindly setting
+    // it true here would clobber that hold: a subsequent auto-lock / power-button lock would then pass the
+    // LockScreen guards and disarm the pending operation. When nothing is pending (first-wallet setup, or the
+    // op already ended/was consumed) re-enabling is correct; the notice-tile destruct
+    // (GuiSettingCountDownDestruct) restores auto-lock at the true add-wallet boundary.
+    if (!SE_IsProvisionRecoveryArmed()) {
+        SetPageLockScreen(true);
+    }
+    // Do NOT SE_DisarmProvisionRecovery() here. This view is a re-openable sub-step of add-wallet: backing out
+    // of the set-pin tile (CloseCurrentViewHandler) tears this view down but leaves the user inside add-wallet
+    // at the notice tile, and re-entering set-pin never re-runs the verify that armed the provision. Disarming
+    // here would drop the arm mid-flow, so the eventual provision fails. The arm is dropped at the true
+    // add-wallet boundary instead: GuiSettingCountDownDestruct (notice-tile teardown) on cancel, and
+    // SetNewKeyPieceToSE consumes it on a successful provision.
     if (g_pageWidget != NULL) {
         DestroyPageWidget(g_pageWidget);
         g_pageWidget = NULL;
@@ -515,9 +536,6 @@ static void OpenMoreHandler(lv_event_t *e)
         MoreInfoTable_t moreInfoTable[] = {
             {.name = _("change_entropy"), .src = &imgDice, .callBack = OpenChangeEntropyHandler, NULL},
             {.name = passphraseText, .src = &imgEnterPassphrase, .callBack = PassphraseButtonHandler, NULL},
-#ifdef WEB3_VERSION
-            {.name = _("generate_ton_mnenonic"), .src = &imgTonPhrase, .callBack = TonPhraseButtonHandler, NULL},
-#endif
             {.name = _("Tutorial"), .src = &imgTutorial, .callBack = QuestionMarkEventCb, NULL},
         };
         g_openMoreHintBox = GuiCreateMoreInfoHintBox(NULL, NULL, moreInfoTable, NUMBER_OF_ARRAYS(moreInfoTable), true, &g_openMoreHintBox);
@@ -596,7 +614,7 @@ static void CreateChangeEntropyView(void)
     }
 
     // System Desc Container
-    lv_obj_t *descCont = GuiCreateContainerWithParent(cont, 408, 114);
+    lv_obj_t *descCont = GuiCreateContainerWithParent(cont, 408, 144);
     g_entropyMethods[0].descCont = descCont;
     lv_obj_align_to(descCont, method_cont, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 24);
     lv_obj_set_style_radius(descCont, 24, LV_PART_MAIN);
@@ -728,10 +746,3 @@ bool GuiCreateWalletNeedPassphrase(void)
     return !lv_obj_has_flag(g_warningCont, LV_OBJ_FLAG_HIDDEN);
 }
 
-#ifdef WEB3_VERSION
-static void TonPhraseButtonHandler(lv_event_t *e)
-{
-    GUI_DEL_OBJ(g_openMoreHintBox);
-    GuiFrameOpenView(&g_tonMnemonicHintView);
-}
-#endif

@@ -35,3 +35,36 @@ pub mod base64_format {
             .map(Into::into)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct Base64Value {
+        #[serde(with = "base64_format")]
+        data: Vec<u8>,
+    }
+
+    #[test]
+    fn base64_helpers_roundtrip_binary_data() {
+        let data = vec![0x00, 0x01, 0xFE, 0xFF];
+        let encoded = to_base64(&data);
+
+        assert_eq!(encoded, "AAH+/w==");
+        assert_eq!(from_base64(&encoded).unwrap(), data);
+    }
+
+    #[test]
+    fn serde_base64_format_roundtrip_and_rejects_invalid_input() {
+        let value = Base64Value {
+            data: vec![1, 2, 3, 4],
+        };
+        let json = serde_json::to_string(&value).unwrap();
+
+        assert_eq!(json, r#"{"data":"AQIDBA=="}"#);
+        assert_eq!(serde_json::from_str::<Base64Value>(&json).unwrap(), value);
+        assert!(serde_json::from_str::<Base64Value>(r#"{"data":"%%%"}"#).is_err());
+    }
+}

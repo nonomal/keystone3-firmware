@@ -281,3 +281,68 @@ where
 
     Ok(num)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct NumericValues {
+        #[serde(deserialize_with = "deserialize_stringified_numeric")]
+        numeric: U256,
+        #[serde(deserialize_with = "deserialize_stringified_numeric_opt")]
+        numeric_opt: Option<U256>,
+        #[serde(deserialize_with = "deserialize_stringified_u64")]
+        value_u64: u64,
+        #[serde(deserialize_with = "deserialize_stringified_eth_u64")]
+        eth_u64: U64,
+        #[serde(deserialize_with = "deserialize_number_seq")]
+        sequence: U256,
+    }
+
+    #[test]
+    fn numeric_conversions_support_strings_hex_and_numbers() {
+        assert_eq!(U256::from(Numeric::Num(7)), U256::from(7));
+        assert_eq!("42".parse::<Numeric>().map(U256::from).unwrap(), 42.into());
+        assert_eq!(
+            "0x2a".parse::<Numeric>().map(U256::from).unwrap(),
+            42.into()
+        );
+        assert!("not-a-number".parse::<Numeric>().is_err());
+
+        let decimal = U256::try_from(StringifiedNumeric::String("123".into())).unwrap();
+        let hex = U256::try_from(StringifiedNumeric::String("0x7b".into())).unwrap();
+        let number = U256::try_from(StringifiedNumeric::Num(7.into())).unwrap();
+        assert_eq!(decimal, U256::from(123));
+        assert_eq!(hex, U256::from(123));
+        assert_eq!(number, U256::from(7));
+
+        let signed = i128::try_from(StringifiedNumeric::String("-9".into())).unwrap();
+        assert_eq!(signed, -9);
+        let bytes: [u8; 32] = StringifiedNumeric::String("255".into()).try_into().unwrap();
+        assert_eq!(bytes[31], 255);
+        let small: U64 = StringifiedNumeric::String("42".into()).try_into().unwrap();
+        assert_eq!(small, U64::from(42));
+    }
+
+    #[test]
+    fn serde_numeric_helpers_cover_supported_representations() {
+        let values: NumericValues = serde_json::from_str(
+            r#"{
+                "numeric":"0x2a",
+                "numeric_opt":"43",
+                "value_u64":44,
+                "eth_u64":"45",
+                "sequence":["0x2e"]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(values.numeric, U256::from(42));
+        assert_eq!(values.numeric_opt, Some(U256::from(43)));
+        assert_eq!(values.value_u64, 44);
+        assert_eq!(values.eth_u64, U64::from(45));
+        assert_eq!(values.sequence, U256::from(46));
+    }
+}

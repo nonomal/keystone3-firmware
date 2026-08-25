@@ -12,13 +12,11 @@
 #include "user_memory.h"
 #include "gui_chain.h"
 #include "drv_lcd_bright.h"
-#include "drv_mpu.h"
 #include "device_setting.h"
 #include "anti_tamper.h"
 #include "screenshot.h"
 #include "lv_i18n_api.h"
 #include "gui_api.h"
-#include "drv_mpu.h"
 #include "drv_gd25qxx.h"
 
 #define LVGL_FAST_TICK_MS                   5
@@ -102,8 +100,6 @@ static void UiDisplayTask(void *argument)
     }
     GuiFrameOpenView(&g_initView);
     SetLcdBright(GetBright());
-    MpuInit();
-
     while (1) {
         RefreshLvglTickMode();
         ret = osMessageQueueGet(g_uiQueue, &rcvMsg, NULL, g_dynamicTick);
@@ -143,6 +139,8 @@ static void UiDisplayTask(void *argument)
             case UI_MSG_USB_TRANSPORT_NEXT_VIEW: {
                 if (GuiCheckIfTopView(&g_USBTransportView)) {
                     GuiEmitSignal(SIG_CLOSE_USB_TRANSPORT, NULL, 0);
+                } else if (GuiCheckIfTopView(&g_keyDerivationRequestView)) {
+                    GuiEmitSignal(SIG_CLOSE_KEY_DERIVATION_REQUEST, NULL, 0);
                 }
             }
             break;
@@ -171,6 +169,12 @@ static void UiDisplayTask(void *argument)
             break;
 #endif
             case UI_MSG_PREPARE_RECEIVE_UR_USB: {
+#ifdef CYPHERPUNK_VERSION
+                if (rcvMsg.value == ZcashBatchTx) {
+                    GuiFrameOpenView(&g_zcashBatchView);
+                    break;
+                }
+#endif
                 GuiFrameOpenViewWithParam(&g_transactionDetailView, &rcvMsg.value, sizeof(rcvMsg.value));
             }
             break;

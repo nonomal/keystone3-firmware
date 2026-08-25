@@ -13,8 +13,6 @@ typedef struct {
     uint16_t hintboxHeight;
 } AttentionHintboxContext;
 
-
-
 typedef struct {
     char *title;
     char *context;
@@ -24,15 +22,11 @@ typedef struct {
     uint16_t hintboxHeight;
 } EnableBlindSigningHintboxContext;
 
-
-
-
 static uint16_t g_confirmSign = SIG_SETUP_RSA_PRIVATE_KEY_RECEIVE_CONFIRM;
 
 static AttentionHintboxContext *BuildConfirmationHintboxContext();
 static EnableBlindSigningHintboxContext *BuildEnableBlindSigningHintboxContext();
 static AttentionHintboxContext *BuildLowPowerHintboxContext();
-static AttentionHintboxContext *HardWareCallInvaildPathHintboxContext();
 static void CloseAttentionHandler(lv_event_t *e);
 static void ConfirmAttentionHandler(lv_event_t *e);
 static void EnableBlindSigningHandler(lv_event_t *e);
@@ -137,6 +131,11 @@ void GuiCloseAttentionHintbox()
 
 void GuiCreateHardwareCallInvaildParamHintbox(char *title, char *content)
 {
+    GuiCreateHardwareCallInvaildParamHintboxWithHandler(title, content, CloseAttentionHandler);
+}
+
+void GuiCreateHardwareCallInvaildParamHintboxWithHandler(char *title, char *content, lv_event_cb_t okHandler)
+{
     AttentionHintboxContext *context = SRAM_MALLOC(sizeof(AttentionHintboxContext));
     context->icon = &imgUnknown;
     context->hintboxHeight = 416;
@@ -156,7 +155,7 @@ void GuiCreateHardwareCallInvaildParamHintbox(char *title, char *content)
     lv_obj_set_style_radius(tempObj, 24, LV_PART_MAIN);
     lv_obj_set_style_bg_color(tempObj, WHITE_COLOR_OPA20, LV_PART_MAIN);
     lv_obj_align(tempObj, LV_ALIGN_BOTTOM_RIGHT, -36, -24);
-    lv_obj_add_event_cb(tempObj, CloseAttentionHandler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(tempObj, okHandler == NULL ? CloseAttentionHandler : okHandler, LV_EVENT_CLICKED, NULL);
     SRAM_FREE(context);
 }
 

@@ -295,7 +295,10 @@ int32_t SimulatorLoadAccountSecret(uint8_t accountIndex, AccountSecret_t *accoun
     cJSON *passwordJson = cJSON_GetObjectItem(rootJson, "password");
     if (passwordJson == NULL || strcmp(passwordJson->valuestring, password) != 0) {
         cJSON_Delete(rootJson);
-        return ret;
+        // Password mismatch must NOT be reported as success, otherwise the
+        // duplicate-PIN check (CheckPasswordExisted -> VerifyAccountPassword)
+        // always treats any new PIN as a duplicate of an existing account.
+        return ERR_KEYSTORE_PASSWORD_ERR;
     }
     GetJsonArrayData(rootJson, accountSecret->entropy, ENTROPY_MAX_LEN, "entropy");
     GetJsonArrayData(rootJson, accountSecret->seed, SEED_LEN, "seed");
@@ -396,7 +399,7 @@ int32_t SE_HmacEncryptRead(uint8_t *data, uint8_t page)
         GetJsonArrayData(rootJson, data, 32, "hmac");
     } else if (page == account *  PAGE_NUM_PER_ACCOUNT + PAGE_INDEX_KEY_PIECE) {
         GetJsonArrayData(rootJson, data, 32, "key_piece");
-    } else if (page == account *  PAGE_NUM_PER_ACCOUNT + PAGE_INDEX_PASSWORD_HASH) {
+    } else if (page == account *  PAGE_NUM_PER_ACCOUNT + PAGE_INDEX_LEGACY_PASSWORD_HASH) {
         GetJsonArrayData(rootJson, data, 32, "password_hash");
     } else if (page == account *  PAGE_NUM_PER_ACCOUNT + PAGE_INDEX_PARAM) {
         GetJsonArrayData(rootJson, data, sizeof(AccountInfo_t), "param");
@@ -407,7 +410,6 @@ int32_t SE_HmacEncryptRead(uint8_t *data, uint8_t page)
         // printf("pAccountInfo->isSlip39 = %u\n", pAccountInfo->isSlip39);
         // printf("pAccountInfo->passphraseQuickAccess = %d\n", pAccountInfo->passphraseQuickAccess);
         // printf("pAccountInfo->passphraseMark = %d\n", pAccountInfo->passphraseMark);
-        // printf("pAccountInfo->isTon = %u\n", pAccountInfo->isTon);
         // printf("pAccountInfo->slip39Id = %d\n", pAccountInfo->slip39Id[0] * 256 + pAccountInfo->slip39Id[1]);
         // PrintArray("mfp", pAccountInfo->mfp, 4);
         // printf("pAccountInfo->slip39Ie = %d\n", pAccountInfo->slip39Ie[0]);
@@ -455,7 +457,7 @@ int32_t SE_HmacEncryptWrite(const uint8_t *data, uint8_t page)
         // ModifyJsonArrayData(rootJson, data, 32, "hmac");
     } else if (page == account *  PAGE_NUM_PER_ACCOUNT + PAGE_INDEX_KEY_PIECE) {
         // ModifyJsonArrayData(rootJson, data, 32, "key_piece");
-    } else if (page == account *  PAGE_NUM_PER_ACCOUNT + PAGE_INDEX_PASSWORD_HASH) {
+    } else if (page == account *  PAGE_NUM_PER_ACCOUNT + PAGE_INDEX_LEGACY_PASSWORD_HASH) {
         // ModifyJsonArrayData(rootJson, data, 32, "password_hash");
     } else if (page == account *  PAGE_NUM_PER_ACCOUNT + PAGE_INDEX_PARAM) {
         ModifyJsonArrayData(rootJson, data, sizeof(AccountInfo_t), "param");
@@ -466,7 +468,6 @@ int32_t SE_HmacEncryptWrite(const uint8_t *data, uint8_t page)
         // printf("pAccountInfo->isSlip39 = %u\n", pAccountInfo->isSlip39);
         // printf("pAccountInfo->passphraseQuickAccess = %d\n", pAccountInfo->passphraseQuickAccess);
         // printf("pAccountInfo->passphraseMark = %d\n", pAccountInfo->passphraseMark);
-        // printf("pAccountInfo->isTon = %u\n", pAccountInfo->isTon);
         // printf("pAccountInfo->slip39Id = %d\n", pAccountInfo->slip39Id[0] * 256 + pAccountInfo->slip39Id[1]);
         // PrintArray("mfp", pAccountInfo->mfp, 4);
         // printf("pAccountInfo->slip39Ie = %d\n", pAccountInfo->slip39Ie[0]);
@@ -555,26 +556,39 @@ int32_t SE_DeriveKey(uint8_t slot, const uint8_t *authKey)
     return 0;
 }
 
-void FatfsGetFileName(const char *path, char *fileName[], uint32_t maxLen, uint32_t *number, const char *contain)
+void FatfsGetFileName(const char *path, char *fileName[], uint32_t maxLen, uint32_t *number, const char *contain, uint32_t maxCount)
 {
     lv_fs_dir_t dir;
     char fname[256];
     uint32_t count = 0;
+
+    if (number == NULL) {
+        return;
+    }
+    *number = 0;
+    if (path == NULL || fileName == NULL || maxLen == 0 || maxCount == 0) {
+        return;
+    }
+
     lv_fs_res_t res = lv_fs_dir_open(&dir, path);
     if (res != LV_FS_RES_OK) {
         return;
     }
 
-    while (lv_fs_dir_read(&dir, fname) == LV_FS_RES_OK) {
+    while (count < maxCount && lv_fs_dir_read(&dir, fname) == LV_FS_RES_OK) {
         if (strlen(fname) == 0) {
             break;
         }
-        if (contain != NULL && !strstr(fname, contain)) {
+        if ((contain != NULL && !strstr(fname, contain)) || strlen(fname) >= maxLen) {
             continue;
         }
 
+        if (fileName[count] == NULL) {
+            break;
+        }
+
         printf("fname = %s\n", fname);
-        strcpy(fileName[count], fname);
+        snprintf(fileName[count], maxLen, "%s", fname);
         count++;
     }
     lv_fs_dir_close(&dir);

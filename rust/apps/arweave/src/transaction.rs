@@ -278,4 +278,24 @@ mod tests {
         let base64 = Base64("Hello world".as_bytes().to_vec());
         assert_eq!(base64.to_string(), "SGVsbG8gd29ybGQ");
     }
+
+    #[test]
+    fn test_tag_constructors() {
+        let raw = Tag::<Base64>::from_utf8_strs("name", "value").unwrap();
+        assert_eq!(
+            raw,
+            Tag {
+                name: Base64(b"name".to_vec()),
+                value: Base64(b"value".to_vec())
+            }
+        );
+        let text = Tag::<String>::from_utf8_strs("name", "value").unwrap();
+        assert_eq!(
+            text,
+            Tag {
+                name: "name".into(),
+                value: "value".into()
+            }
+        );
+    }
 }

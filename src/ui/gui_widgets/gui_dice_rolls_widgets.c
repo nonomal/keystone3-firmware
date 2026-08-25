@@ -6,7 +6,10 @@
 #include "gui_create_wallet_widgets.h"
 #include "sha256.h"
 #include "log_print.h"
+#include "assert.h"
 
+#define DICE_ROLLS_128_BIT_MIN_LEN                      50
+#define DICE_ROLLS_256_BIT_MIN_LEN                      100
 #define DICE_ROLLS_MAX_LEN                              256
 
 static void GuiCreatePage(lv_obj_t *parent);
@@ -17,6 +20,8 @@ static void OnTextareaValueChangeHandler(lv_event_t *e);
 static void QuitConfirmHandler(lv_event_t *e);
 static void UndoClickHandler(lv_event_t *e);
 static void ConfirmHandler(lv_event_t *e);
+static const char *GetDiceRollHintText(uint32_t length);
+static void UpdateDiceRollHint(uint32_t length);
 
 static PageWidget_t *g_page;
 static uint8_t g_seedType;
@@ -141,7 +146,7 @@ static void GuiCreatePage(lv_obj_t *parent)
     lv_obj_align(label, LV_ALIGN_BOTTOM_LEFT, 36, -54);
     g_rollsLabel = label;
 
-    label = GuiCreateIllustrateLabel(parent, _("dice_roll_hint_label"));
+    label = GuiCreateIllustrateLabel(parent, GetDiceRollHintText(0));
     lv_obj_set_style_text_color(label, WHITE_COLOR, LV_PART_MAIN);
     lv_obj_align(label, LV_ALIGN_BOTTOM_LEFT, 36, -24);
     lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
@@ -203,11 +208,7 @@ static void OnTextareaValueChangeHandler(lv_event_t *e)
         uint32_t length = strnlen_s(txt, DICE_ROLLS_MAX_LEN);
         uint32_t lineCount = length / 27 + 1;
 
-        if (length > 0 && length < 50) {
-            lv_obj_clear_flag(g_hintLabel, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(g_hintLabel, LV_OBJ_FLAG_HIDDEN);
-        }
+        UpdateDiceRollHint(length);
 
         if (length < DICE_ROLLS_MAX_LEN) {
             if (!lv_obj_has_flag(g_maxLimitLabel, LV_OBJ_FLAG_HIDDEN)) {
@@ -236,7 +237,7 @@ static void OnTextareaValueChangeHandler(lv_event_t *e)
         }
 
         lv_label_set_text_fmt(g_rollsLabel, "%d", length);
-        if (length >= 50) {
+        if (length >= DICE_ROLLS_128_BIT_MIN_LEN) {
             if (!g_confirmValid) {
                 g_confirmValid = true;
                 lv_obj_remove_style(g_confirmBtn, &g_numBtnmDisabledStyle, LV_PART_MAIN);
@@ -288,6 +289,27 @@ static void OnTextareaValueChangeHandler(lv_event_t *e)
     }
 }
 
+static const char *GetDiceRollHintText(uint32_t length)
+{
+    bool is128BitTarget = length < DICE_ROLLS_128_BIT_MIN_LEN;
+
+    if (g_seedType == SEED_TYPE_BIP39) {
+        return is128BitTarget ? _("dice_roll_hint_label") : _("dice_roll_hint_24_label");
+    }
+    return is128BitTarget ? _("dice_roll_hint_slip39_20_label") : _("dice_roll_hint_slip39_33_label");
+}
+
+static void UpdateDiceRollHint(uint32_t length)
+{
+    if (length == 0 || length >= DICE_ROLLS_256_BIT_MIN_LEN) {
+        lv_obj_add_flag(g_hintLabel, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    lv_label_set_text(g_hintLabel, GetDiceRollHintText(length));
+    lv_obj_clear_flag(g_hintLabel, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void UndoClickHandler(lv_event_t *e)
 {
     lv_obj_t *ta = (lv_obj_t *)lv_event_get_user_data(e);
@@ -301,23 +323,29 @@ static void ConfirmHandler(lv_event_t *e)
 
     // convert result
     const char *txt = lv_textarea_get_text(ta);
-    char *temp = SRAM_MALLOC(BUFFER_SIZE_512);
-    size_t len = strnlen_s(txt, BUFFER_SIZE_512);
-    strcpy_s(temp, BUFFER_SIZE_512, txt);
-    for (size_t i = 0; i < len; i++) {
+    char *temp = SRAM_MALLOC(DICE_ROLLS_MAX_LEN + 1);
+    size_t rollsLen = strnlen_s(txt, DICE_ROLLS_MAX_LEN);
+    strcpy_s(temp, DICE_ROLLS_MAX_LEN + 1, txt);
+    for (size_t i = 0; i < rollsLen; i++) {
         char c = temp[i];
+        if (c < '1' || c > '6') {
+            ASSERT(false);
+        }
         if (c == '6') {
             temp[i] = '0';
         }
     }
     uint8_t hash[32] = {0};
-    sha256((struct sha256 *)hash, temp, strnlen_s(temp, BUFFER_SIZE_512));
-    uint8_t entropyMethod = 1;
-    SecretCacheSetDiceRollHash(hash);
-    if (g_seedType == SEED_TYPE_BIP39) {
-        GuiFrameOpenViewWithParam(&g_singlePhraseView, &entropyMethod, 1);
-    } else {
-        GuiFrameOpenViewWithParam(&g_createShareView, &entropyMethod, 1);
-    }
+    sha256((struct sha256 *)hash, temp, rollsLen);
+    memset_s(temp, DICE_ROLLS_MAX_LEN + 1, 0, DICE_ROLLS_MAX_LEN + 1);
     SRAM_FREE(temp);
+    uint8_t entropyMethod = ENTROPY_TYPE_DICE_ROLLS;
+    SecretCacheSetDiceRollHash(hash);
+    SecretCacheSetDiceRollsLen(rollsLen);
+    CLEAR_ARRAY(hash);
+    if (g_seedType == SEED_TYPE_BIP39) {
+        GuiFrameOpenViewWithParam(&g_singlePhraseView, &entropyMethod, sizeof(entropyMethod));
+    } else {
+        GuiFrameOpenViewWithParam(&g_createShareView, &entropyMethod, sizeof(entropyMethod));
+    }
 }

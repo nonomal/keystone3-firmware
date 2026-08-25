@@ -6,7 +6,6 @@
 #include "user_utils.h"
 #include "account_public_info.h"
 #include "assert.h"
-#include "hash_and_salt.h"
 #include "secret_cache.h"
 #include "log_print.h"
 #include "user_memory.h"
@@ -19,12 +18,15 @@
 #include "safe_str_lib.h"
 #endif
 
+#define PIN_HASH_WIPED_MAGIC            0xA5
+
 typedef struct {
     uint8_t loginPasswordErrorCount;
     uint8_t currentPasswordErrorCount;
     uint8_t reserved1[2];
     uint32_t lastLockDeviceTime;
-    uint8_t reserved2[24];               //byte 1~31 reserved.
+    uint8_t pinHashWiped;                //byte 8, PIN_HASH_WIPED_MAGIC when legacy hash pages are wiped.
+    uint8_t reserved2[23];               //byte 9~31 reserved.
 } PublicInfo_t;
 
 static uint8_t g_currentAccountIndex = ACCOUNT_INDEX_LOGOUT;
@@ -32,10 +34,13 @@ static uint8_t g_lastAccountIndex = ACCOUNT_INDEX_LOGOUT;
 static AccountInfo_t g_currentAccountInfo = {0};
 static PublicInfo_t g_publicInfo = {0};
 
-#ifdef CYPHERPUNK_VERSION
+#ifndef BTC_ONLY
 static ZcashUFVKCache_t g_zcashUFVKcache = {0};
 static void ClearZcashUFVK();
 #endif
+
+// The legacy page-8 PIN-hash wipe (gen-1 only) lives in se_backend_gen1.c's boot_migrate, dispatched
+// below via SE_BootMigrate(). The gen-2 backend has no such wipe.
 
 /// @brief Get current account info from SE, and copy info to g_currentAccountInfo.
 /// @return err code.
@@ -62,6 +67,10 @@ int32_t AccountManagerInit(void)
     ASSERT(sizeof(AccountInfo_t) == 32);
     ASSERT(sizeof(PublicInfo_t) == 32);
     ret = SE_HmacEncryptRead((uint8_t *)&g_publicInfo, PAGE_PUBLIC_INFO);
+    CHECK_ERRCODE_RETURN_INT(ret);
+    // One-time boot migration, dispatched to the generation backend: gen-1 wipes the legacy page-8 PIN
+    // hash; gen-2 and UNPROVISIONED/INVALID are no-ops. The wipe lives only in se_backend_gen1.c.
+    ret = SE_BootMigrate();
     return ret;
 }
 
@@ -139,10 +148,15 @@ int32_t CreateNewAccount(uint8_t accountIndex, const uint8_t *entropy, uint8_t e
     ret = SaveCurrentAccountInfo();
     CHECK_ERRCODE_RETURN_INT(ret);
     ret = AccountPublicInfoSwitch(g_currentAccountIndex, password, true);
-#ifdef CYPHERPUNK_VERSION
-    CalculateZcashUFVK(accountIndex, password);
-#endif
     CHECK_ERRCODE_RETURN_INT(ret);
+#ifdef CYPHERPUNK_VERSION
+    ret = SetupZcashCache(accountIndex, password);
+    CHECK_ERRCODE_RETURN_INT(ret);
+#endif
+#ifdef WEB3_VERSION
+    ret = SetupZcashSFP(accountIndex, password);
+    CHECK_ERRCODE_RETURN_INT(ret);
+#endif
     return ret;
 }
 
@@ -165,6 +179,14 @@ int32_t CreateNewSlip39Account(uint8_t accountIndex, const uint8_t *ems, const u
     CHECK_ERRCODE_RETURN_INT(ret);
     ret = AccountPublicInfoSwitch(g_currentAccountIndex, password, true);
     CHECK_ERRCODE_RETURN_INT(ret);
+#ifdef CYPHERPUNK_VERSION
+    ret = SetupZcashCache(accountIndex, password);
+    CHECK_ERRCODE_RETURN_INT(ret);
+#endif
+#ifdef WEB3_VERSION
+    ret = SetupZcashSFP(accountIndex, password);
+    CHECK_ERRCODE_RETURN_INT(ret);
+#endif
     return ret;
 }
 
@@ -173,7 +195,7 @@ int32_t CreateNewSlip39Account(uint8_t accountIndex, const uint8_t *ems, const u
 /// @return err code.
 int32_t VerifyCurrentAccountPassword(const char *password)
 {
-    uint8_t accountIndex, passwordHashClac[32], passwordHashStore[32];
+    uint8_t accountIndex;
     int32_t ret;
 
     do {
@@ -185,23 +207,59 @@ int32_t VerifyCurrentAccountPassword(const char *password)
 #ifdef COMPILE_SIMULATOR
         ret = SimulatorVerifyCurrentPassword(accountIndex, password);
 #else
-        ret = SE_HmacEncryptRead(passwordHashStore, accountIndex * PAGE_NUM_PER_ACCOUNT + PAGE_INDEX_PASSWORD_HASH);
-        CHECK_ERRCODE_BREAK("read password hash", ret);
-        HashWithSalt(passwordHashClac, (const uint8_t *)password, strlen(password), "password hash");
-        ret = memcmp(passwordHashStore, passwordHashClac, 32);
+        ret = VerifyAccountPassword(accountIndex, password);
 #endif
         if (ret == SUCCESS_CODE) {
             g_publicInfo.currentPasswordErrorCount = 0;
-        } else {
+        } else if (ret == ERR_KEYSTORE_PASSWORD_ERR) {
             g_publicInfo.currentPasswordErrorCount++;
             printf("password error count=%d\r\n", g_publicInfo.currentPasswordErrorCount);
-            ret = ERR_KEYSTORE_PASSWORD_ERR;
+        } else {
+            break;
         }
         SE_HmacEncryptWrite((uint8_t *)&g_publicInfo, PAGE_PUBLIC_INFO);
     } while (0);
 
-    CLEAR_ARRAY(passwordHashStore);
-    CLEAR_ARRAY(passwordHashClac);
+    return ret;
+}
+
+uint8_t RecordCurrentPasswordError(uint8_t maxCount)
+{
+    if (g_publicInfo.currentPasswordErrorCount < maxCount) {
+        g_publicInfo.currentPasswordErrorCount++;
+    } else {
+        g_publicInfo.currentPasswordErrorCount = maxCount;
+    }
+    printf("current password error count=%d\r\n", g_publicInfo.currentPasswordErrorCount);
+    SE_HmacEncryptWrite((uint8_t *)&g_publicInfo, PAGE_PUBLIC_INFO);
+    return g_publicInfo.currentPasswordErrorCount;
+}
+
+/// @brief Verify ownership against any wallet and tick the LOGIN error counter WITHOUT logging in.
+/// Used by forget-pass "Prove Device Ownership" so wrong attempts count toward the device wipe
+/// (loginPasswordErrorCount). The count is clamped at maxCount (= MAX_LOGIN_PASSWORD_ERROR_COUNT)
+/// because the modal is escapable and the count persists.
+/// @param[out] accountIndex matched account index on success (may be NULL).
+/// @param[in] password Password string.
+/// @param[in] maxCount clamp ceiling for the login error counter (= MAX_LOGIN_PASSWORD_ERROR_COUNT).
+/// @return err code.
+int32_t VerifyOwnershipPasswordTryAll(uint8_t *accountIndex, const char *password, uint8_t maxCount)
+{
+    int32_t ret = FindAccountByPassword(accountIndex, password);
+    if (ret == SUCCESS_CODE) {
+        g_publicInfo.loginPasswordErrorCount = 0;
+    } else if (ret == ERR_KEYSTORE_PASSWORD_ERR) {
+        if (g_publicInfo.loginPasswordErrorCount < maxCount) {
+            g_publicInfo.loginPasswordErrorCount++;
+        } else {
+            // pin at the wipe threshold (heals a stale over-cap value too).
+            g_publicInfo.loginPasswordErrorCount = maxCount;
+        }
+        printf("prove-ownership login error count=%d\r\n", g_publicInfo.loginPasswordErrorCount);
+    } else {
+        return ret;   // transient SE error: don't touch the counter
+    }
+    SE_HmacEncryptWrite((uint8_t *)&g_publicInfo, PAGE_PUBLIC_INFO);
     return ret;
 }
 
@@ -214,8 +272,8 @@ int32_t ClearCurrentPasswordErrorCount(void)
     return SUCCESS_CODE;
 }
 
-/// @brief Verify password, if password verify success, set current account id. PasswordErrorCount++ if err.
-/// @param[out] accountIndex If password verify success, account index would be set here. Can be NULL if not needed.
+/// @brief Find account by password, if success set current account id. PasswordErrorCount++ if err.
+/// @param[out] accountIndex If password verify success, matched account index would be set here. Can be NULL if not needed.
 /// @param password Password string.
 /// @return err code.
 int32_t VerifyPasswordAndLogin(uint8_t *accountIndex, const char *password)
@@ -223,7 +281,7 @@ int32_t VerifyPasswordAndLogin(uint8_t *accountIndex, const char *password)
     int32_t ret;
     uint8_t tempIndex;
 
-    ret = VerifyPassword(&tempIndex, password);
+    ret = FindAccountByPassword(&tempIndex, password);
     if (ret == SUCCESS_CODE) {
         g_currentAccountIndex = tempIndex;
         g_lastAccountIndex = tempIndex;
@@ -233,7 +291,7 @@ int32_t VerifyPasswordAndLogin(uint8_t *accountIndex, const char *password)
         ret = ReadCurrentAccountInfo();
         g_publicInfo.loginPasswordErrorCount = 0;
         g_publicInfo.currentPasswordErrorCount = 0;
-#ifdef CYPHERPUNK_VERSION
+#ifndef BTC_ONLY
         ClearZcashUFVK();
 #endif
         if (PassphraseExist(g_currentAccountIndex)) {
@@ -244,8 +302,14 @@ int32_t VerifyPasswordAndLogin(uint8_t *accountIndex, const char *password)
             printf("passphrase not exist, info switch\r\n");
             ret = AccountPublicInfoSwitch(g_currentAccountIndex, password, false);
         }
+        CHECK_ERRCODE_RETURN_INT(ret);
 #ifdef CYPHERPUNK_VERSION
-        CalculateZcashUFVK(g_currentAccountIndex, password);
+        ret = SetupZcashCache(*accountIndex, password);
+        CHECK_ERRCODE_RETURN_INT(ret);
+#endif
+#ifdef WEB3_VERSION
+        ret = SetupZcashSFP(*accountIndex, password);
+        CHECK_ERRCODE_RETURN_INT(ret);
 #endif
     } else {
         g_publicInfo.loginPasswordErrorCount++;
@@ -260,6 +324,11 @@ int32_t VerifyPasswordAndLogin(uint8_t *accountIndex, const char *password)
 uint8_t GetCurrentAccountIndex(void)
 {
     return g_currentAccountIndex;
+}
+
+uint8_t GetLastAccountIndex(void)
+{
+    return g_lastAccountIndex;
 }
 
 /// @brief Set last account index.
@@ -318,10 +387,8 @@ void LogoutCurrentAccount(void)
 /// @return err code.
 int32_t GetAccountInfo(uint8_t accountIndex, AccountInfo_t *pInfo)
 {
-    int32_t ret;
     ASSERT(accountIndex <= 2);
-    ret = SE_HmacEncryptRead((uint8_t *)pInfo, accountIndex * PAGE_NUM_PER_ACCOUNT + PAGE_INDEX_PARAM);
-    return ret;
+    return SE_HmacEncryptRead((uint8_t *)pInfo, accountIndex * PAGE_NUM_PER_ACCOUNT + PAGE_INDEX_PARAM);
 }
 
 /// @brief Erase public info in SE.
@@ -330,6 +397,24 @@ int32_t ErasePublicInfo(void)
 {
     CLEAR_OBJECT(g_publicInfo);
     return SE_HmacEncryptWrite((uint8_t *)&g_publicInfo, PAGE_PUBLIC_INFO);
+}
+
+bool IsPinHashWiped(void)
+{
+    return g_publicInfo.pinHashWiped == PIN_HASH_WIPED_MAGIC;
+}
+
+int32_t SetPinHashWiped(bool wiped)
+{
+    uint8_t oldPinHashWiped = g_publicInfo.pinHashWiped;
+    int32_t ret;
+
+    g_publicInfo.pinHashWiped = wiped ? PIN_HASH_WIPED_MAGIC : 0;
+    ret = SE_HmacEncryptWrite((uint8_t *)&g_publicInfo, PAGE_PUBLIC_INFO);
+    if (ret != SUCCESS_CODE) {
+        g_publicInfo.pinHashWiped = oldPinHashWiped;
+    }
+    return ret;
 }
 
 /// @brief Get slip39 idrandom identifier of the current account.
@@ -461,6 +546,13 @@ uint32_t GetCurrentAccountEntropyLen(void)
     return g_currentAccountInfo.entropyLen;
 }
 
+// For BIP39, seed length is fixed 64 bytes (derived via PBKDF2 from mnemonic).
+// For SLIP39, the seed is produced by MS flow and we use the current account entropy length.
+uint32_t GetCurrentAccountSeedLen(void)
+{
+    return (GetMnemonicType() == MNEMONIC_TYPE_SLIP39) ? GetCurrentAccountEntropyLen() : SEED_LEN;
+}
+
 /// @brief Save g_currentAccountInfo to SE.
 /// @return err code.
 int32_t SaveCurrentAccountInfo(void)
@@ -514,130 +606,183 @@ int32_t DestroyAccount(uint8_t accountIndex)
     uint8_t data[32] = {0};
 
     ASSERT(accountIndex <= 2);
+    // Mark the account DELETING (external status page, survives the zero-loop below). If power dies mid-erase,
+    // the boot check sees DELETING and finishes the deletion. Cleared to UNKNOWN once the data is gone.
+    printf("destroy account %d\n", accountIndex);
+    ret = SE_SetAccountStatus(accountIndex, ACCOUNT_STATUS_DELETING);
+    if (ret != SUCCESS_CODE) {
+        printf("destroy account:set deleting status err,0x%X\n", ret);
+        CLEAR_ARRAY(data);
+        return ret;
+    }
+    printf("destroy account:set account flag in se %d\n", accountIndex);
     for (uint8_t i = 0; i < PAGE_NUM_PER_ACCOUNT; i++) {
         printf("erase index=%d\n", i);
         ret = SE_HmacEncryptWrite(data, accountIndex * PAGE_NUM_PER_ACCOUNT + i);
         CHECK_ERRCODE_BREAK("ds28s60 write", ret);
     }
-    DeleteAccountPublicInfo(accountIndex);
-    ClearAccountPassphrase(accountIndex);
-    SetWalletDataHash(accountIndex, data);
+    // Only declare the deletion complete if the page-erase loop actually finished. If a write failed partway,
+    // leave the status at DELETING (do NOT roll to UNKNOWN) so the next boot's AccountsDataCheck finishes the
+    // deletion — exactly as it would after a power-loss. Clearing the marker on a write error would lose that
+    // resume guarantee and could resurrect a half-erased account via the coarse 2-sentinel boot check.
+    if (ret == SUCCESS_CODE) {
+        // gen-2: erase this account's SE-side key material, not just the pages zeroed above (gen-1/simulator
+        // no-op). Keep DELETING until all per-account cleanup succeeds so boot can resume after power loss.
+        ret = SE_EraseAccount(accountIndex);
+        if (ret != SUCCESS_CODE) {
+            printf("destroy account:erase se account err,0x%X\n", ret);
+        } else {
+            DeleteAccountPublicInfo(accountIndex);
+            ClearAccountPassphrase(accountIndex);
+            ret = SetWalletDataHash(accountIndex, data);
+            if (ret != SUCCESS_CODE) {
+                printf("destroy account:clear wallet data hash err,0x%X\n", ret);
+            } else {
+                ret = SE_SetAccountStatus(accountIndex, ACCOUNT_STATUS_UNKNOWN);  // deletion complete -> blank
+                if (ret != SUCCESS_CODE) {
+                    printf("destroy account:clear deleting status err,0x%X\n", ret);
+                } else {
+                    printf("destroy account:clear se done %d\n", accountIndex);
+                }
+            }
+        }
+    }
     LogoutCurrentAccount();
 
     CLEAR_OBJECT(g_currentAccountInfo);
     CLEAR_ARRAY(data);
-
+    if (ret == SUCCESS_CODE) {
+        printf("destroy account %d all set\n", accountIndex);
+    } else {
+        printf("destroy account %d finished with err,0x%X\n", accountIndex, ret);
+    }
     return ret;
 }
-
+// wipe device may power lose, check the account status.
+// check whether the account data is valid, if not, erase the account data.
 void AccountsDataCheck(void)
 {
     int32_t ret;
-    uint8_t data[32], accountIndex, validCount, i;
+    uint8_t data[32], accountIndex, validCount;
 
     for (accountIndex = 0; accountIndex < 3; accountIndex++) {
+        // gen-2 lifecycle status (external page): an account caught mid-create / mid-change-PIN / mid-delete is
+        // inconsistent -> erase it. delete -> finishes the deletion; change-PIN -> user restores from seed;
+        // create -> drops the partial wallet. A valid CREATED account skips the coarse heuristic below.
+        AccountStatus_t status = ACCOUNT_STATUS_UNKNOWN;
+        if (SE_GetAccountStatus(accountIndex, &status) == SUCCESS_CODE) {
+            if (status == ACCOUNT_STATUS_CREATING || status == ACCOUNT_STATUS_CHANGING_PIN ||
+                    status == ACCOUNT_STATUS_DELETING) {
+                printf("incomplete op on account %d (status=%d) -> erase\n", accountIndex, status);
+                DestroyAccount(accountIndex);
+                continue;
+            }
+            if (status == ACCOUNT_STATUS_CREATED) {
+                continue;   // explicitly valid
+            }
+        }
+        // status UNKNOWN (legacy / pre-status accounts) -> original coarse 2-sentinel check.
         validCount = 0;
+        // for se gen1, check each account start
         ret = SE_HmacEncryptRead(data, accountIndex * PAGE_NUM_PER_ACCOUNT + PAGE_INDEX_IV);
         CHECK_ERRCODE_BREAK("read iv", ret);
         if (CheckEntropy(data, 32)) {
             validCount++;
         }
-        ret = SE_HmacEncryptRead(data, accountIndex * PAGE_NUM_PER_ACCOUNT + PAGE_INDEX_PASSWORD_HASH);
-        CHECK_ERRCODE_BREAK("read pwd hash", ret);
+        // for se gen1, check each account key to check validity
+        ret = SE_HmacEncryptRead(data, accountIndex * PAGE_NUM_PER_ACCOUNT + PAGE_INDEX_KEY_PIECE);
+        CHECK_ERRCODE_BREAK("read key piece", ret);
         if (CheckEntropy(data, 32)) {
             validCount++;
         }
+        // if start disconsistent with keypieces, consider the account data is illegal, erase the account data.
         if (validCount == 1) {
             printf("illegal data:%d\n", accountIndex);
-            memset_s(data, sizeof(data), 0, sizeof(data));
-            for (i = 0; i < PAGE_NUM_PER_ACCOUNT; i++) {
-                printf("erase index=%d\n", i);
-                ret = SE_HmacEncryptWrite(data, accountIndex * PAGE_NUM_PER_ACCOUNT + i);
-                CHECK_ERRCODE_BREAK("ds28s60 write", ret);
-            }
+            DestroyAccount(accountIndex);
         }
     }
+    CLEAR_ARRAY(data);
 }
 
-#ifdef WEB3_VERSION
-int32_t CreateNewTonAccount(uint8_t accountIndex, const char *mnemonic, const char *password)
+#ifndef BTC_ONLY
+bool IsZcashSupportedForCurrentMnemonic(void)
 {
-    ASSERT(accountIndex <= 2);
-    DestroyAccount(accountIndex);
-    CLEAR_OBJECT(g_currentAccountInfo);
-    g_currentAccountIndex = accountIndex;
-    g_currentAccountInfo.isTon = true;
-    SetWalletName(SecretCacheGetWalletName());
-    SetWalletIconIndex(SecretCacheGetWalletIconIndex());
-
-    int32_t ret = SaveNewTonMnemonic(accountIndex, mnemonic, password);
-    CHECK_ERRCODE_RETURN_INT(ret);
-
-    ret = SaveCurrentAccountInfo();
-    CHECK_ERRCODE_RETURN_INT(ret);
-    ret = AccountPublicInfoSwitch(g_currentAccountIndex, password, true);
-    CHECK_ERRCODE_RETURN_INT(ret);
-    return ret;
-}
-#endif
-
+    MnemonicType type = GetMnemonicType();
+    if (type == MNEMONIC_TYPE_BIP39) return true;
 #ifdef CYPHERPUNK_VERSION
-static void SetZcashUFVK(uint8_t accountIndex, const char* ufvk, const uint8_t* seedFingerprint)
+    if (type == MNEMONIC_TYPE_SLIP39) return GetCurrentAccountEntropyLen() >= 32;
+#endif
+    return false;
+}
+
+bool IsMoneroSupportedForCurrentMnemonic(void)
+{
+    return GetMnemonicType() == MNEMONIC_TYPE_BIP39;
+}
+
+static void SetZcashUFVK(uint8_t accountIndex, const char* ufvk)
 {
     ASSERT(accountIndex <= 2);
     g_zcashUFVKcache.accountIndex = accountIndex;
-    ClearZcashUFVK();
-    strcpy_s(g_zcashUFVKcache.ufvkCache, ZCASH_UFVK_MAX_LEN, ufvk);
+    strcpy_s(g_zcashUFVKcache.ufvkCache, sizeof(g_zcashUFVKcache.ufvkCache), ufvk);
+}
 
+static void SetZcashSFP(uint8_t accountIndex, const uint8_t* seedFingerprint)
+{
+    ASSERT(accountIndex <= 2);
+    g_zcashUFVKcache.accountIndex = accountIndex;
     memcpy_s(g_zcashUFVKcache.seedFingerprint, 32, seedFingerprint, 32);
-    printf("SetZcashUFVK, %s\r\n", g_zcashUFVKcache.ufvkCache);
+    printf("SetZcashSFP\r\n");
 }
 
 static void ClearZcashUFVK()
 {
-    memset_s(g_zcashUFVKcache.ufvkCache, ZCASH_UFVK_MAX_LEN, '\0', ZCASH_UFVK_MAX_LEN);
+    memset_s(g_zcashUFVKcache.ufvkCache, sizeof(g_zcashUFVKcache.ufvkCache), '\0', sizeof(g_zcashUFVKcache.ufvkCache));
     memset_s(g_zcashUFVKcache.seedFingerprint, 32, 0, 32);
 }
 
-int32_t GetZcashUFVK(uint8_t accountIndex, char* outUFVK, uint8_t* outSFP)
+int32_t GetZcashUFVK(uint8_t accountIndex, char* outUFVK)
 {
     ASSERT(accountIndex <= 2);
     if (g_zcashUFVKcache.accountIndex == accountIndex) {
-        strcpy_s(outUFVK, ZCASH_UFVK_MAX_LEN, g_zcashUFVKcache.ufvkCache);
+        strcpy_s(outUFVK, ZCASH_UFVK_BUFFER_SIZE, g_zcashUFVKcache.ufvkCache);
+        return SUCCESS_CODE;
+    }
+    return ERR_ZCASH_INVALID_ACCOUNT_INDEX;
+}
+
+int32_t GetZcashSFP(uint8_t accountIndex, uint8_t* outSFP)
+{
+    ASSERT(accountIndex <= 2);
+    if (g_zcashUFVKcache.accountIndex == accountIndex) {
         memcpy_s(outSFP, 32, g_zcashUFVKcache.seedFingerprint, 32);
         return SUCCESS_CODE;
     }
     return ERR_ZCASH_INVALID_ACCOUNT_INDEX;
 }
 
-int32_t CalculateZcashUFVK(uint8_t accountIndex, const char* password)
+int32_t SetupZcashSFP(uint8_t accountIndex, const char* password)
 {
     ASSERT(accountIndex <= 2);
 
-    if (GetMnemonicType() == MNEMONIC_TYPE_SLIP39 || GetMnemonicType() == MNEMONIC_TYPE_TON) {
+    if (!IsZcashSupportedForCurrentMnemonic()) {
         return SUCCESS_CODE;
     }
 
     uint8_t seed[SEED_LEN];
     int len = GetMnemonicType() == MNEMONIC_TYPE_BIP39 ? sizeof(seed) : GetCurrentAccountEntropyLen();
     int32_t ret = GetAccountSeed(accountIndex, seed, password);
+    if (ret != SUCCESS_CODE) {
+        CLEAR_ARRAY(seed);
+        return ret;
+    }
 
-    SimpleResponse_u8 *iv_response = rust_derive_iv_from_seed(seed, len);
-
-    uint8_t iv_bytes[16];
-    memcpy_s(iv_bytes, 16, iv_response->data, 16);
-    free_simple_response_u8(iv_response);
-
-    char *zcashEncrypted = GetCurrentAccountPublicKey(ZCASH_UFVK_ENCRYPTED_0);
-    SimpleResponse_c_char *response = rust_aes256_cbc_decrypt(zcashEncrypted, password, iv_bytes, 16);
-
-    char ufvk[ZCASH_UFVK_MAX_LEN] = {'\0'};
-    strcpy_s(ufvk, ZCASH_UFVK_MAX_LEN, response->data);
-    free_simple_response_c_char(response);
     SimpleResponse_u8 *responseSFP = calculate_zcash_seed_fingerprint(seed, len);
+    CLEAR_ARRAY(seed);
     if (responseSFP->error_code != 0) {
-        ret = response->error_code;
-        printf("error: %s\r\n", response->error_message);
+        ret = responseSFP->error_code;
+        printf("error: %s\r\n", responseSFP->error_message);
+        free_simple_response_u8(responseSFP);
         return ret;
     }
 
@@ -645,7 +790,93 @@ int32_t CalculateZcashUFVK(uint8_t accountIndex, const char* password)
     memcpy_s(sfp, 32, responseSFP->data, 32);
     free_simple_response_u8(responseSFP);
 
-    SetZcashUFVK(accountIndex, ufvk, sfp);
+    SetZcashSFP(accountIndex, sfp);
     return ret;
 }
+
+#ifdef CYPHERPUNK_VERSION
+int32_t SetupZcashCache(uint8_t accountIndex, const char* password)
+{
+    ASSERT(accountIndex <= 2);
+
+    if (!IsZcashSupportedForCurrentMnemonic()) {
+        return SUCCESS_CODE;
+    }
+
+    ClearZcashUFVK();
+
+    uint8_t seed[SEED_LEN];
+    int len = GetMnemonicType() == MNEMONIC_TYPE_BIP39 ? sizeof(seed) : GetCurrentAccountEntropyLen();
+    int32_t ret = GetAccountSeed(accountIndex, seed, password);
+    if (ret != SUCCESS_CODE) {
+        CLEAR_ARRAY(seed);
+        return ret;
+    }
+
+    SimpleResponse_u8 *key_response = rust_derive_key_from_seed(seed, len);
+    if (key_response == NULL || key_response->error_code != 0) {
+        ret = key_response ? key_response->error_code : ERR_GENERAL_FAIL;
+        CLEAR_ARRAY(seed);
+        if (key_response != NULL) {
+            printf("error: %s\r\n", key_response->error_message);
+            free_simple_response_u8(key_response);
+        }
+        return ret;
+    }
+    uint8_t key_bytes[32];
+    memcpy_s(key_bytes, sizeof(key_bytes), key_response->data, sizeof(key_bytes));
+    free_simple_response_u8(key_response);
+
+    char *zcashEncrypted = GetCurrentAccountPublicKey(ZCASH_UFVK_ENCRYPTED_0);
+    if (zcashEncrypted == NULL) {
+        CLEAR_ARRAY(seed);
+        CLEAR_ARRAY(key_bytes);
+        return ERR_GENERAL_FAIL;
+    }
+
+    // Storage format: hex(IV_16) || hex(ciphertext). Legacy blobs (no 32-char IV prefix) fail the
+    // decrypt in Rust and are regenerated from the seed instead of failing the login.
+    SimpleResponse_c_char *response = rust_decrypt_ufvk_blob(zcashEncrypted, key_bytes, sizeof(key_bytes));
+    CLEAR_ARRAY(key_bytes);
+    char ufvk[ZCASH_UFVK_BUFFER_SIZE] = {'\0'};
+    if (response == NULL || response->error_code != 0) {
+        // Stale or legacy ciphertext (old password keying / no IV prefix). The entered password
+        // already passed SE verification, so regenerate the UFVK from the seed instead of failing
+        // the login and locking the user out.
+        if (response != NULL) {
+            printf("zcash ufvk decrypt failed, regenerating from seed. error: %s\r\n", response->error_message);
+            free_simple_response_c_char(response);
+        } else {
+            printf("zcash ufvk decrypt failed, regenerating from seed.\r\n");
+        }
+        ret = RegenerateZcashUFVK(accountIndex, seed, len, password, ufvk, sizeof(ufvk));
+        if (ret != SUCCESS_CODE) {
+            CLEAR_ARRAY(ufvk);
+            CLEAR_ARRAY(seed);
+            return ret;
+        }
+    } else {
+        strcpy_s(ufvk, sizeof(ufvk), response->data);
+        free_simple_response_c_char(response);
+    }
+    SetZcashUFVK(accountIndex, ufvk);
+    CLEAR_ARRAY(ufvk);
+
+    SimpleResponse_u8 *responseSFP = calculate_zcash_seed_fingerprint(seed, len);
+    CLEAR_ARRAY(seed);
+    if (responseSFP->error_code != 0) {
+        ret = responseSFP->error_code;
+        printf("error: %s\r\n", responseSFP->error_message);
+        free_simple_response_u8(responseSFP);
+        return ret;
+    }
+
+    uint8_t sfp[32];
+    memcpy_s(sfp, 32, responseSFP->data, 32);
+    free_simple_response_u8(responseSFP);
+
+    SetZcashSFP(accountIndex, sfp);
+    return ret;
+}
+#endif
 #endif

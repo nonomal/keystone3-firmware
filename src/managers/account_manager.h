@@ -8,6 +8,7 @@
 
 #define WALLET_NAME_MAX_LEN                 16
 #define ZCASH_UFVK_MAX_LEN                  384
+#define ZCASH_UFVK_BUFFER_SIZE              (ZCASH_UFVK_MAX_LEN + 1)
 
 typedef enum {
     PASSCODE_TYPE_PIN,
@@ -48,7 +49,7 @@ typedef struct {
 
 typedef struct {
     uint8_t accountIndex;
-    char ufvkCache[ZCASH_UFVK_MAX_LEN + 1];
+    char ufvkCache[ZCASH_UFVK_BUFFER_SIZE];
     uint8_t seedFingerprint[32];
 } ZcashUFVKCache_t;
 
@@ -61,13 +62,15 @@ void SetPasscodeType(PasscodeType type);
 void SetMnemonicType(MnemonicType type);
 
 int32_t CreateNewAccount(uint8_t accountIndex, const uint8_t *entropy, uint8_t entropyLen, const char *password);
-int32_t CreateNewTonAccount(uint8_t accountIndex, const char *mnemonic, const char *password);
 int32_t CreateNewSlip39Account(uint8_t accountIndex, const uint8_t *ems, const uint8_t *entropy, uint8_t entropyLen, const char *password, uint16_t id, bool eb, uint8_t ie);
 int32_t ClearCurrentPasswordErrorCount(void);
 int32_t VerifyCurrentAccountPassword(const char *password);
+uint8_t RecordCurrentPasswordError(uint8_t maxCount);
+int32_t VerifyOwnershipPasswordTryAll(uint8_t *accountIndex, const char *password, uint8_t maxCount);
 int32_t VerifyPasswordAndLogin(uint8_t *accountIndex, const char *password);
 void LogoutCurrentAccount(void);
 uint8_t GetCurrentAccountIndex(void);
+uint8_t GetLastAccountIndex(void);
 void SetCurrentAccountIndex(void);
 int32_t GetExistAccountNum(uint8_t *accountNum);
 int32_t GetBlankAccountIndex(uint8_t *accountIndex);
@@ -88,6 +91,9 @@ uint8_t GetCurrentPasswordErrorCount(void);
 uint32_t GetLastLockDeviceTime(void);
 void SetLastLockDeviceTime(uint32_t timeStamp);
 uint32_t GetCurrentAccountEntropyLen(void);
+uint32_t GetCurrentAccountSeedLen(void);
+bool IsPinHashWiped(void);
+int32_t SetPinHashWiped(bool wiped);
 
 uint8_t *GetCurrentAccountMfp(void);
 int32_t GetAccountInfo(uint8_t accountIndex, AccountInfo_t *pInfo);
@@ -100,8 +106,14 @@ uint8_t GetSlip39Eb(void);
 
 void AccountsDataCheck(void);
 
+#ifndef BTC_ONLY
+bool IsZcashSupportedForCurrentMnemonic(void);
+bool IsMoneroSupportedForCurrentMnemonic(void);
+int32_t GetZcashUFVK(uint8_t accountIndex, char* outUFVK);
+int32_t GetZcashSFP(uint8_t accountIndex, uint8_t* outSFP);
+int32_t SetupZcashSFP(uint8_t accountIndex, const char* password);
 #ifdef CYPHERPUNK_VERSION
-int32_t GetZcashUFVK(uint8_t accountIndex, char* outUFVK, uint8_t* outSFP);
-int32_t CalculateZcashUFVK(uint8_t accountIndex, const char* password);
+int32_t SetupZcashCache(uint8_t accountIndex, const char* password);
+#endif
 #endif
 #endif

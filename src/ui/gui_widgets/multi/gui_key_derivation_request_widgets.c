@@ -16,6 +16,8 @@
 #include "account_public_info.h"
 #include "gui_key_derivation_request_widgets.h"
 
+#define MAX_KEY_DERIVATION_SCHEMAS 24U
+
 typedef struct KeyDerivationWidget {
     uint8_t currentTile;
     PageWidget_t *pageWidget;
@@ -49,7 +51,7 @@ typedef enum HardwareCallV1AdaDerivationAlgo {
 } ADA_DERIVATION_ALGO;
 
 // global variable to save the selected derivation path
-static ADA_DERIVATION_ALGO selected_ada_derivation_algo = HD_STANDARD_ADA;
+static ADA_DERIVATION_ALGO g_adaDerivationAlgo = HD_STANDARD_ADA;
 
 static void *g_data;
 static URParseResult *g_urResult = NULL;
@@ -80,7 +82,8 @@ static void GuiCreateQRCodeWidget(lv_obj_t *parent);
 static void GuiCreateCommonHardWareCallQRCodeWidget(lv_obj_t *parent);
 static void OnApproveHandler(lv_event_t *e);
 static void OnReturnHandler(lv_event_t *e);
-static void ModelParseQRHardwareCall();
+static bool ModelParseQRHardwareCall(void);
+static void SetHardwareCallParamsCheckResult(HardwareCallResult_t result);
 static UREncodeResult *ModelGenerateSyncUR(void);
 static void OpenTutorialHandler(lv_event_t *e);
 static void OpenMoreHandler(lv_event_t *e);
@@ -132,6 +135,9 @@ void FreeKeyDerivationRequestMemory(void)
         free_Response_QRHardwareCallData(g_response);
         g_response = NULL;
     }
+#ifdef WEB3_VERSION
+    g_adaDerivationAlgo = HD_STANDARD_ADA;
+#endif
 }
 
 static char *GetChangeDerivationPathDesc(void)
@@ -145,12 +151,14 @@ static void RecalcCurrentWalletIndex(char *origin)
         g_walletIndex = WALLET_LIST_ETERNL;
     } else if (strcmp("Typhon Extension", origin) == 0) {
         g_walletIndex = WALLET_LIST_TYPHON;
-    } else if (strcmp("Leap Mobile", origin) == 0) {
-        g_walletIndex = WALLET_LIST_LEAP;
     } else if (strcmp("Begin", origin) == 0) {
         g_walletIndex = WALLET_LIST_BEGIN;
+    } else if (strcmp("lace", origin) == 0 || strcmp("Lace", origin) == 0) {
+        g_walletIndex = WALLET_LIST_LACE;
     } else if (strcmp("Medusa", origin) == 0) {
         g_walletIndex = WALLET_LIST_MEDUSA;
+    } else if (strcmp("gerowallet", origin) == 0) {
+        g_walletIndex = WALLET_LIST_GERO;
     } else {
         g_walletIndex = WALLET_LIST_ETERNL;
     }
@@ -166,7 +174,13 @@ void GuiKeyDerivationRequestInit(bool isUsb)
     SetNavBarLeftBtn(g_keyDerivationTileView.pageWidget->navBarWidget, NVS_BAR_RETURN, CloseCurrentViewHandler, NULL);
     lv_obj_t *tileView = GuiCreateTileView(g_keyDerivationTileView.pageWidget->contentZone);
     lv_obj_t *tile = lv_tileview_add_tile(tileView, TILE_APPROVE, 0, LV_DIR_HOR);
-    ModelParseQRHardwareCall();
+    if (!ModelParseQRHardwareCall()) {
+        if (isUsb) {
+            const char *message = "Invalid hardware call parameters";
+            HandleURResultViaUSBAsyncFunc(message, strlen(message), GetCurrentUSParsingRequestID(), PRS_PARSING_ERROR);
+        }
+        return;
+    }
     // choose different animate qr widget by hardware call  version
     if (strcmp("1", g_callData->version) == 0) {
         GuiCreateHardwareCallApproveWidget(tile);
@@ -176,6 +190,13 @@ void GuiKeyDerivationRequestInit(bool isUsb)
     RecalcCurrentWalletIndex(g_response->data->origin);
     SetWallet(g_keyDerivationTileView.pageWidget->navBarWidget, g_walletIndex, NULL);
     SetNavBarRightBtn(g_keyDerivationTileView.pageWidget->navBarWidget, NVS_BAR_MORE_INFO, OpenMoreHandler, NULL);
+#ifdef WEB3_VERSION
+    if (IsCardano()) {
+        g_adaDerivationAlgo = GetAccountType();
+    } else {
+        g_adaDerivationAlgo = HD_STANDARD_ADA;
+    }
+#endif
     tile = lv_tileview_add_tile(tileView, TILE_QRCODE, 0, LV_DIR_HOR);
     // choose different animate qr widget by hardware call  version
     if (strcmp("1", g_callData->version) == 0) {
@@ -358,22 +379,53 @@ void GuiKeyDerivationRequestPrevTile()
     lv_obj_set_tile_id(g_keyDerivationTileView.tileView, g_keyDerivationTileView.currentTile, 0, LV_ANIM_OFF);
 }
 
+bool GuiKeyDerivationRequestIsUsbPasswordReady(void)
+{
+    char *password = SecretCacheGetPassword();
+    return g_isUsb && g_isUsbPassWordCheck && password != NULL &&
+           strnlen_s(password, PASSWORD_MAX_LEN) != 0;
+}
+
 void UpdateAndParseHardwareCall(void)
 {
     GuiModelURClear();
-    if (strnlen_s(SecretCacheGetPassword(), PASSWORD_MAX_LEN) != 0 && g_isUsbPassWordCheck) {
+    if (GuiKeyDerivationRequestIsUsbPasswordReady()) {
         if (g_response != NULL) {
             free_Response_QRHardwareCallData(g_response);
             g_response = NULL;
         }
-        ModelParseQRHardwareCall();
-        HiddenKeyboardAndShowAnimateQR();
+        if (ModelParseQRHardwareCall()) {
+            HiddenKeyboardAndShowAnimateQR();
+        } else {
+            const char *message = "Invalid hardware call parameters";
+            HandleURResultViaUSBAsyncFunc(message, strlen(message), GetCurrentUSParsingRequestID(), PRS_PARSING_ERROR);
+        }
     }
 }
 
-static void ModelParseQRHardwareCall()
+static bool ModelParseQRHardwareCall(void)
 {
+    if (g_data == NULL) {
+        g_callData = NULL;
+        SetHardwareCallParamsCheckResult((HardwareCallResult_t) {
+            false, _("invaild_schemas_size"), _("invaild_schemas_size_big")
+        });
+        return false;
+    }
+
     Response_QRHardwareCallData *data = parse_qr_hardware_call(g_data);
+    if (data == NULL || data->error_code != 0 || data->data == NULL ||
+        data->data->key_derivation == NULL ||
+        data->data->key_derivation->schemas == NULL ||
+        data->data->key_derivation->schemas->data == NULL ||
+        data->data->version == NULL || data->data->origin == NULL) {
+        g_callData = NULL;
+        g_response = data;
+        SetHardwareCallParamsCheckResult((HardwareCallResult_t) {
+            false, _("invaild_schemas_size"), _("invaild_schemas_size_big")
+        });
+        return false;
+    }
     g_callData = data->data;
     g_response = data;
     for (size_t i = 0; i < g_callData->key_derivation->schemas->size; i++) {
@@ -383,6 +435,7 @@ static void ModelParseQRHardwareCall()
         g_hasAda = true;
     }
     CheckHardwareCallRequestIsLegal();
+    return true;
 }
 
 typedef enum {
@@ -460,7 +513,8 @@ static HardwareCallResult_t CheckHardWareCallV0AdaPathIsLegal(char *path)
 
 static HardwareCallResult_t CheckHardwareCallRequestIsLegal(void)
 {
-    if (g_callData->key_derivation->schemas->size > 24) {
+    if (g_callData->key_derivation->schemas->size == 0U ||
+        g_callData->key_derivation->schemas->size > MAX_KEY_DERIVATION_SCHEMAS) {
         SetHardwareCallParamsCheckResult((HardwareCallResult_t) {
             false, _("invaild_schemas_size"), _("invaild_schemas_size_big")
         });
@@ -494,9 +548,10 @@ static HardwareCallResult_t CheckHardwareCallRequestIsLegal(void)
                 });
                 return g_hardwareCallParamsCheckResult;
             }
-            // check path match the chainType
-            Response_bool *response = check_hardware_call_path(g_response->data->key_derivation->schemas->data[i].key_path, g_response->data->key_derivation->schemas->data[i].chain_type);
-            if (*response->data == false) {
+            // Check whether the requested derivation path is supported.
+            Response_bool *response = check_hardware_call_path(g_response->data->key_derivation->schemas->data[i].key_path);
+            if (response == NULL || response->error_code != 0 ||
+                response->data == NULL || *response->data == false) {
                 SetHardwareCallParamsCheckResult((HardwareCallResult_t) {
                     false, _("invaild_account_path"),  _("invaild_account_path_notice")
                 });
@@ -513,6 +568,18 @@ static HardwareCallResult_t CheckHardwareCallRequestIsLegal(void)
 
 static UREncodeResult *ModelGenerateSyncUR(void)
 {
+    if (g_callData == NULL || g_callData->version == NULL ||
+        g_callData->key_derivation == NULL ||
+        g_callData->key_derivation->schemas == NULL ||
+        g_callData->key_derivation->schemas->data == NULL) {
+        return NULL;
+    }
+
+    size_t schemaCount = g_callData->key_derivation->schemas->size;
+    if (schemaCount == 0U || schemaCount > MAX_KEY_DERIVATION_SCHEMAS) {
+        return NULL;
+    }
+
     bool enable = IsPreviousLockScreenEnable();
     SetLockScreen(false);
     CSliceFFI_ExtendedPublicKey keys;
@@ -526,9 +593,9 @@ static UREncodeResult *ModelGenerateSyncUR(void)
         int seedLen = isSlip39 ? GetCurrentAccountEntropyLen() : sizeof(seed) ;
 
         GetAccountSeed(GetCurrentAccountIndex(), seed, password);
-        ExtendedPublicKey xpubs[24];
-        SimpleResponse_c_char *pubkey[24];
-        for (size_t i = 0; i < g_callData->key_derivation->schemas->size; i++) {
+        ExtendedPublicKey xpubs[MAX_KEY_DERIVATION_SCHEMAS] = {0};
+        SimpleResponse_c_char *pubkey[MAX_KEY_DERIVATION_SCHEMAS] = {0};
+        for (size_t i = 0; i < schemaCount; i++) {
             uint8_t derivationType = GetDerivationTypeByCurveAndDeriveAlgo(g_callData->key_derivation->schemas->data[i].curve, g_callData->key_derivation->schemas->data[i].algo);
             char *path = g_callData->key_derivation->schemas->data[i].key_path;
             switch (derivationType) {
@@ -539,7 +606,7 @@ static UREncodeResult *ModelGenerateSyncUR(void)
                 pubkey[i] = get_ed25519_pubkey_by_seed(seed, seedLen, path);
                 break;
             case BIP32_ED25519:
-                if (selected_ada_derivation_algo == HD_STANDARD_ADA && !g_isUsb) {
+                if (g_adaDerivationAlgo == HD_STANDARD_ADA && !g_isUsb) {
 #ifdef WEB3_VERSION
                     if (isSlip39) {
                         pubkey[i] = cardano_get_pubkey_by_slip23(seed, seedLen, path);
@@ -560,7 +627,7 @@ static UREncodeResult *ModelGenerateSyncUR(void)
                     char* icarusMasterKey = cip3_response->data;
                     pubkey[i] = derive_bip32_ed25519_extended_pubkey(icarusMasterKey, path);
 #endif
-                } else if (selected_ada_derivation_algo == HD_LEDGER_BITBOX_ADA || g_isUsb) {
+                } else if (g_adaDerivationAlgo == HD_LEDGER_BITBOX_ADA || g_isUsb) {
                     // seed -> mnemonic --> master key(m) -> derive key
                     uint8_t entropyLen = 0;
                     uint8_t entropy[64];
@@ -575,11 +642,21 @@ static UREncodeResult *ModelGenerateSyncUR(void)
             default:
                 break;
             }
+            if (pubkey[i] == NULL || pubkey[i]->data == NULL) {
+                for (size_t j = 0; j <= i; j++) {
+                    if (pubkey[j] != NULL) {
+                        free_simple_response_c_char(pubkey[j]);
+                    }
+                }
+                memset_s(seed, sizeof(seed), 0, sizeof(seed));
+                SetLockScreen(enable);
+                return NULL;
+            }
             xpubs[i].path = path;
             xpubs[i].xpub = pubkey[i]->data;
         }
         keys.data = xpubs;
-        keys.size = g_callData->key_derivation->schemas->size;
+        keys.size = schemaCount;
         uint8_t mfp[4] = {0};
         GetMasterFingerPrint(mfp);
         // clean the cache after use
@@ -587,24 +664,33 @@ static UREncodeResult *ModelGenerateSyncUR(void)
             ClearSecretCache();
         }
         Ptr_UREncodeResult urResult = generate_key_derivation_ur(mfp, 4, &keys, firmwareVersion);
-        for (size_t i = 0; i < g_callData->key_derivation->schemas->size; i++) {
+        for (size_t i = 0; i < schemaCount; i++) {
             if (pubkey[i] != NULL) {
                 free_simple_response_c_char(pubkey[i]);
             }
         }
+        memset_s(seed, sizeof(seed), 0, sizeof(seed));
         SetLockScreen(enable);
         return urResult;
     }
 #ifdef WEB3_VERSION
-    ExtendedPublicKey xpubs[24];
-    for (size_t i = 0; i < g_callData->key_derivation->schemas->size; i++) {
+    ExtendedPublicKey xpubs[MAX_KEY_DERIVATION_SCHEMAS] = {0};
+    for (size_t i = 0; i < schemaCount; i++) {
         KeyDerivationSchema schema = g_callData->key_derivation->schemas->data[i];
+        if (schema.key_path == NULL) {
+            SetLockScreen(enable);
+            return NULL;
+        }
         char* xpub = GetCurrentAccountPublicKey(GetXPubIndexByPath(schema.key_path));
+        if (xpub == NULL) {
+            SetLockScreen(enable);
+            return NULL;
+        }
         xpubs[i].path = schema.key_path;
         xpubs[i].xpub = xpub;
     }
     keys.data = xpubs;
-    keys.size = g_callData->key_derivation->schemas->size;
+    keys.size = schemaCount;
     uint8_t mfp[4] = {0};
     GetMasterFingerPrint(mfp);
     // print keys
@@ -654,7 +740,7 @@ static void GuiCreateHardwareCallApproveWidget(lv_obj_t *parent)
         lv_obj_align(cont, LV_ALIGN_TOP_LEFT, 0, 102 * i);
         lv_obj_set_style_bg_opa(cont, LV_OPA_0, LV_PART_MAIN);
         char title[BUFFER_SIZE_32] = {0};
-        sprintf(title, "%s-%d", _("account_head"), i);
+        snprintf(title, sizeof(title), "%s-%u", _("account_head"), (unsigned int)i);
         label = GuiCreateIllustrateLabel(cont, title);
         lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 16);
         char path[BUFFER_SIZE_64] = {0};
@@ -721,7 +807,7 @@ static void GuiCreateApproveWidget(lv_obj_t *parent)
         lv_obj_align(cont, LV_ALIGN_TOP_LEFT, 0, 102 * i);
         lv_obj_set_style_bg_opa(cont, LV_OPA_0, LV_PART_MAIN);
         char title[BUFFER_SIZE_32] = {0};
-        sprintf(title, "%s-%d", _("account_head"), i);
+        snprintf(title, sizeof(title), "%s-%u", _("account_head"), (unsigned int)i);
         label = GuiCreateIllustrateLabel(cont, title);
         lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 16);
         char path[BUFFER_SIZE_64] = {0};
@@ -830,7 +916,7 @@ static void GuiShowKeyBoardDialog(lv_obj_t *parent)
 static void OnApproveHandler(lv_event_t *e)
 {
     // click approve button and check the hardware call params
-    HardwareCallResult_t res =  g_hardwareCallParamsCheckResult;
+    HardwareCallResult_t res = g_hardwareCallParamsCheckResult;
     if (!res.isLegal) {
         GuiCreateHardwareCallInvaildParamHintbox(res.title, res.message);
         return;
@@ -875,6 +961,17 @@ void GuiKeyDeriveUsbPullout(void)
 
 void HiddenKeyboardAndShowAnimateQR()
 {
+    HardwareCallResult_t checkResult = CheckHardwareCallRequestIsLegal();
+    if (!checkResult.isLegal) {
+        if (g_isUsb) {
+            const char *message = checkResult.message != NULL ? checkResult.message : "Invalid hardware call parameters";
+            HandleURResultViaUSBAsyncFunc(message, strlen(message), GetCurrentUSParsingRequestID(), PRS_PARSING_ERROR);
+        } else {
+            GuiCreateHardwareCallInvaildParamHintbox(checkResult.title, checkResult.message);
+        }
+        return;
+    }
+
     // close password keyboard
     if (g_isUsb) {
         if (g_keyboardWidget != NULL) {
@@ -882,7 +979,15 @@ void HiddenKeyboardAndShowAnimateQR()
         }
         g_isUsbPassWordCheck = true;
         UREncodeResult *urResult = ModelGenerateSyncUR();
-        HandleURResultViaUSBFunc(urResult->data, strlen(urResult->data), GetCurrentUSParsingRequestID(), PRS_EXPORT_HARDWARE_CALL_SUCCESS);
+        if (urResult == NULL || urResult->data == NULL) {
+            const char *data = "Generate sync ur failed";
+            HandleURResultViaUSBAsyncFunc(data, strlen(data), GetCurrentUSParsingRequestID(), RSP_FAILURE_CODE);
+            if (urResult != NULL) {
+                free_ur_encode_result(urResult);
+            }
+            return;
+        }
+        HandleURResultViaUSBAsyncFunc(urResult->data, strlen(urResult->data), GetCurrentUSParsingRequestID(), PRS_EXPORT_HARDWARE_CALL_SUCCESS);
         free_ur_encode_result(urResult);
     } else {
         GuiDeleteKeyboardWidget(g_keyboardWidget);
@@ -1218,7 +1323,7 @@ static void ApproveButtonHandler(lv_event_t *e)
 static void RejectButtonHandler(lv_event_t *e)
 {
     const char *data = "UR parsing rejected";
-    HandleURResultViaUSBFunc(data, strlen(data), GetCurrentUSParsingRequestID(), PRS_PARSING_REJECTED);
+    HandleURResultViaUSBAsyncFunc(data, strlen(data), GetCurrentUSParsingRequestID(), PRS_PARSING_REJECTED);
     GuiCloseCurrentWorkingView();
 }
 
@@ -1235,9 +1340,9 @@ static AdaXPubType GetAccountType(void)
 
 static void SaveHardwareCallVersion1AdaDerivationAlgo(lv_event_t *e)
 {
-    selected_ada_derivation_algo = GetCurrentSelectedIndex();
+    g_adaDerivationAlgo = GetCurrentSelectedIndex();
     // save the derivation path type to the json file that be saved in flash
-    SetAccountType(selected_ada_derivation_algo);
+    SetAccountType(g_adaDerivationAlgo);
     CloseDerivationHandler(e);
 }
 
@@ -1277,6 +1382,6 @@ static uint8_t GetXPubIndexByPath(char *path)
 
 static bool IsCardano()
 {
-    return g_walletIndex == WALLET_LIST_ETERNL || g_walletIndex == WALLET_LIST_TYPHON || g_walletIndex == WALLET_LIST_BEGIN || g_walletIndex == WALLET_LIST_MEDUSA;
+    return g_walletIndex == WALLET_LIST_ETERNL || g_walletIndex == WALLET_LIST_TYPHON || g_walletIndex == WALLET_LIST_BEGIN || g_walletIndex == WALLET_LIST_LACE || g_walletIndex == WALLET_LIST_MEDUSA;
 }
 #endif

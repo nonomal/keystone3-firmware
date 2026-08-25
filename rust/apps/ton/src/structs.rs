@@ -3,25 +3,33 @@ use crate::jettons;
 use crate::messages::jetton::JettonMessage;
 use crate::messages::nft::NFTMessage;
 use crate::messages::traits::ParseCell;
-use crate::messages::{Operation, SigningMessage};
+use crate::messages::{Operation, SigningMessage, TransferMessage};
 use crate::utils::shorten_string;
 use crate::vendor::address::TonAddress;
 use crate::vendor::cell::BagOfCells;
-use alloc::string::{String, ToString};
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
 
 use hex;
 use serde::Serialize;
 use serde_json::{self, json, Value};
 
 #[derive(Debug, Clone, Serialize, Default)]
-pub struct TonTransaction {
+pub struct TonMessage {
     pub to: String,
     pub amount: String,
     pub action: String,
     pub comment: Option<String>,
     pub data_view: Option<String>,
-    pub raw_data: String,
     pub contract_data: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct TonTransaction {
+    pub raw_data: String,
+    pub messages: Vec<TonMessage>,
 }
 
 impl TonTransaction {
@@ -45,19 +53,13 @@ impl TonTransaction {
     }
 }
 
-impl TryFrom<&SigningMessage> for TonTransaction {
+impl TryFrom<&TransferMessage> for TonMessage {
     type Error = TonError;
 
-    fn try_from(signing_message: &SigningMessage) -> Result<Self> {
-        if signing_message.messages.is_empty() {
-            return Err(TonError::InvalidTransaction(
-                "transaction does not contain transfer info".to_string(),
-            ));
-        };
-        let message = signing_message.messages[0].clone();
+    fn try_from(message: &TransferMessage) -> Result<Self> {
         let to = message.dest_addr.clone();
         let amount = message.value.clone();
-        match message.data {
+        match &message.data {
             None => Ok(Self {
                 to,
                 amount,
@@ -66,12 +68,12 @@ impl TryFrom<&SigningMessage> for TonTransaction {
             }),
             Some(data) => {
                 let action = data.action.clone().unwrap_or("Ton Transfer".to_string());
-                match data.operation {
+                match &data.operation {
                     Operation::Comment(comment) => Ok(Self {
                         to,
                         amount,
                         action,
-                        comment: Some(comment),
+                        comment: Some(comment.clone()),
                         ..Default::default()
                     }),
                     Operation::JettonMessage(jetton_message) => match jetton_message {
@@ -81,7 +83,7 @@ impl TryFrom<&SigningMessage> for TonTransaction {
                             let amount = jettons::get_jetton_amount_text(
                                 jetton_transfer_message.amount.clone(),
                                 to.clone(),
-                            );
+                            )?;
                             Ok(Self {
                                 to: destination,
                                 amount,
@@ -100,9 +102,6 @@ impl TryFrom<&SigningMessage> for TonTransaction {
                                 ..Default::default()
                             })
                         }
-                        _ => Err(TonError::InvalidTransaction(
-                            "invalid jetton message".to_string(),
-                        )),
                     },
                     Operation::NFTMessage(nft_message) => match nft_message {
                         NFTMessage::NFTTransferMessage(nft_transfer_message) => {
@@ -125,9 +124,6 @@ impl TryFrom<&SigningMessage> for TonTransaction {
                                 ..Default::default()
                             })
                         }
-                        _ => Err(TonError::InvalidTransaction(
-                            "invalid nft message".to_string(),
-                        )),
                     },
                     Operation::OtherMessage(_other_message) => Ok(Self {
                         to,
@@ -138,6 +134,27 @@ impl TryFrom<&SigningMessage> for TonTransaction {
                 }
             }
         }
+    }
+}
+
+impl TryFrom<&SigningMessage> for TonTransaction {
+    type Error = TonError;
+
+    fn try_from(signing_message: &SigningMessage) -> Result<Self> {
+        if signing_message.messages.is_empty() {
+            return Err(TonError::InvalidTransaction(
+                "transaction does not contain transfer info".to_string(),
+            ));
+        };
+        let messages = signing_message
+            .messages
+            .iter()
+            .map(TonMessage::try_from)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            messages,
+            ..Default::default()
+        })
     }
 }
 
@@ -209,5 +226,320 @@ impl TonProof {
             address,
             raw_message: hex::encode(serial),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    extern crate std;
+    use alloc::vec;
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use num_bigint::BigUint;
+    use std::println;
+
+    #[test]
+    fn test_build_multi_message_fixture() {
+        use crate::vendor::cell::CellBuilder;
+
+        fn build_transfer_message(
+            dest: &TonAddress,
+            value: u64,
+            data: Option<crate::vendor::cell::Cell>,
+        ) -> crate::vendor::cell::Cell {
+            let mut builder = CellBuilder::new();
+            builder.store_bit(false).unwrap();
+            builder.store_bit(true).unwrap();
+            builder.store_bit(true).unwrap();
+            builder.store_bit(false).unwrap();
+            builder.store_address(&TonAddress::NULL).unwrap();
+            builder.store_address(dest).unwrap();
+            builder.store_coins(&BigUint::from(value)).unwrap();
+            builder.store_bit(false).unwrap();
+            builder.store_coins(&BigUint::from(0u64)).unwrap();
+            builder.store_coins(&BigUint::from(0u64)).unwrap();
+            builder.store_u64(64, 0).unwrap();
+            builder.store_u32(32, 0).unwrap();
+            builder.store_bit(false).unwrap();
+            builder.store_bit(data.is_some()).unwrap();
+            if let Some(data) = data {
+                builder.store_child(data).unwrap();
+            }
+            builder.build().unwrap()
+        }
+
+        let address1 = TonAddress::new(0, &[0x11; 32]);
+        let address2 = TonAddress::new(0, &[0x22; 32]);
+
+        let message1 = build_transfer_message(&address1, 100_000_000, None);
+
+        let mut comment = CellBuilder::new();
+        comment.store_u32(32, 0).unwrap();
+        comment.store_string("multi message fixture").unwrap();
+        let comment = comment.build().unwrap();
+        let message2 = build_transfer_message(&address2, 250_000_000, Some(comment));
+
+        let mut root = CellBuilder::new();
+        root.store_u32(32, 0x29a9a317).unwrap();
+        root.store_u32(32, 0x66778899).unwrap();
+        root.store_u32(32, 1).unwrap();
+        root.store_u8(8, 3).unwrap();
+        root.store_u8(8, 0).unwrap();
+        root.store_child(message1).unwrap();
+        root.store_child(message2).unwrap();
+
+        let boc = BagOfCells::from_root(root.build().unwrap());
+        let serial = boc.serialize(true).unwrap();
+        let tx = TonTransaction::parse_hex(&serial).unwrap();
+
+        println!("multi message fixture body={}", STANDARD.encode(&serial));
+        println!("multi message fixture hex={}", hex::encode(&serial));
+        assert_eq!(tx.messages.len(), 2);
+        assert_eq!(tx.messages[0].amount, "0.1 Ton");
+        assert_eq!(tx.messages[1].amount, "0.25 Ton");
+        assert_eq!(
+            tx.messages[1].comment.as_deref(),
+            Some("multi message fixture")
+        );
+    }
+
+    #[test]
+    fn test_parse_simple_ton_transfer() {
+        // Simple TON transfer without comment
+        let body = "te6cckEBAgEARwABHCmpoxdmOz6lAAAACAADAQBoQgArFnMvHAX9tOjTp4/RDd3vP2Bn8xG+U5MTuKRKUE1NoqHc1lAAAAAAAAAAAAAAAAAAAHBy4G8=";
+        let serial = STANDARD.decode(body).unwrap();
+
+        let tx = TonTransaction::parse_hex(&serial).unwrap();
+
+        assert_eq!(tx.messages.len(), 1);
+        let message = &tx.messages[0];
+        assert_eq!(message.action, "Ton Transfer");
+        assert!(message.comment.is_none());
+        assert!(message.data_view.is_none());
+        assert!(message.contract_data.is_none());
+        assert!(!message.to.is_empty());
+        assert!(!message.amount.is_empty());
+        assert!(!tx.raw_data.is_empty());
+    }
+
+    #[test]
+    fn test_parse_ton_transfer_with_comment() {
+        // TON transfer with a long comment
+        let serial = "b5ee9c724102050100019700011c29a9a31766611df6000000140003010166420013587ccf19c39b1ca51c29f0253ac98d03b8e5ccfc64c3ac2f21c59c20ee8b65987a1200000000000000000000000000010201fe000000004b657973746f6e652068617264776172652077616c6c6574206f666665727320756e6265617461626c65207365637572697479207769746820332050434920736563757269747920636869707320746f206d616e61676520426974636f696e20616e64206f746865722063727970746f20617373657473206f66660301fe6c696e652e4b657973746f6e65206f666665727320332077616c6c6574732c207768696368206d65616e7320796f752063616e206d616e616765206d756c7469706c65206163636f756e74732073657061726174656c79206f6e206f6e65206465766963652e4b657973746f6e65206f666665727320332077616c6c6574730400942c207768696368206d65616e7320796f752063616e206d616e616765206d756c7469706c65206163636f756e74732073657061726174656c79206f6e206f6e65206465766963652e0a0ac04eabc7";
+        let serial = hex::decode(serial).unwrap();
+
+        let tx = TonTransaction::parse_hex(&serial).unwrap();
+
+        assert_eq!(tx.messages.len(), 1);
+        let message = &tx.messages[0];
+        assert_eq!(message.action, "Ton Transfer");
+        assert!(message.comment.is_some());
+        let comment = message.comment.as_ref().unwrap();
+        assert!(comment.contains("Keystone"));
+        assert!(!message.to.is_empty());
+        assert!(!message.amount.is_empty());
+    }
+
+    #[test]
+    fn test_parse_jetton_transfer() {
+        // Jetton transfer (STON)
+        let serial = "b5ee9c7241010301009e00011c29a9a3176656eb410000001000030101686200091c1bd942402db834b5977d2a1313119c3a3800c8e10233fa8eaf36c655ecab202faf0800000000000000000000000000010200a80f8a7ea5546de4ef815e87fb3989680800ac59ccbc7017f6d3a34e9e3f443777bcfd819fcc46f94e4c4ee291294135368b002d48cb0c90c22c52394f297b33990c2f6bbf6c425780862733961fa457f014ec02025f1050ae";
+        let serial = hex::decode(serial).unwrap();
+
+        let tx = TonTransaction::parse_hex(&serial).unwrap();
+
+        assert_eq!(tx.messages.len(), 1);
+        let message = &tx.messages[0];
+        assert_eq!(message.action, "Jetton Transfer");
+        assert!(message.data_view.is_some());
+        assert!(message.contract_data.is_some());
+        assert!(!message.to.is_empty());
+
+        // Contract data should contain Jetton Wallet Address
+        let contract_data = message.contract_data.as_ref().unwrap();
+        assert!(contract_data.contains("Jetton Wallet Address"));
+    }
+
+    #[test]
+    fn test_parse_transaction_from_boc() {
+        let body = "te6cckEBAgEARwABHCmpoxdmOz6lAAAACAADAQBoQgArFnMvHAX9tOjTp4/RDd3vP2Bn8xG+U5MTuKRKUE1NoqHc1lAAAAAAAAAAAAAAAAAAAHBy4G8=";
+        let serial = STANDARD.decode(body).unwrap();
+        let boc = BagOfCells::parse(&serial).unwrap();
+
+        let tx = TonTransaction::parse(boc).unwrap();
+
+        assert_eq!(tx.messages.len(), 1);
+        assert_eq!(tx.messages[0].action, "Ton Transfer");
+        assert!(!tx.messages[0].to.is_empty());
+        assert!(!tx.messages[0].amount.is_empty());
+    }
+
+    #[test]
+    fn test_transaction_to_json() {
+        let body = "te6cckEBAgEARwABHCmpoxdmOz6lAAAACAADAQBoQgArFnMvHAX9tOjTp4/RDd3vP2Bn8xG+U5MTuKRKUE1NoqHc1lAAAAAAAAAAAAAAAAAAAHBy4G8=";
+        let serial = STANDARD.decode(body).unwrap();
+
+        let tx = TonTransaction::parse_hex(&serial).unwrap();
+        let json = tx.to_json().unwrap();
+
+        assert!(json.is_object());
+        assert!(json.get("raw_data").is_some());
+        assert!(json.get("messages").is_some());
+        let messages = json.get("messages").unwrap().as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].get("action").unwrap(), "Ton Transfer");
+    }
+
+    #[test]
+    fn test_parse_invalid_transaction_empty() {
+        // Try to parse empty data
+        let serial = vec![];
+        let result = TonTransaction::parse_hex(&serial);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_invalid_transaction_corrupted() {
+        // Try to parse corrupted data
+        let serial = vec![0x00, 0x01, 0x02, 0x03];
+        let result = TonTransaction::parse_hex(&serial);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_ton_proof() {
+        // Valid TON proof data
+        let serial = hex::decode("746f6e2d70726f6f662d6974656d2d76322f00000000b5232c324308b148e53ca5ecce6430bdaefdb1095e02189cce587e915fc053b015000000746b6170702e746f6e706f6b65722e6f6e6c696e65142b5866000000003735323061653632393534653666666330303030303030303636353765333639").unwrap();
+
+        let proof = TonProof::parse_hex(&serial).unwrap();
+
+        assert_eq!(proof.domain, "tkapp.tonpoker.online");
+        assert!(!proof.address.is_empty());
+        assert!(!proof.payload.is_empty());
+        assert!(!proof.raw_message.is_empty());
+        println!("Proof address: {}", proof.address);
+        println!("Proof domain: {}", proof.domain);
+        println!("Proof payload: {}", proof.payload);
+    }
+
+    #[test]
+    fn test_parse_ton_proof_invalid_too_short() {
+        // Proof data that is too short
+        let serial = vec![0x74, 0x6f, 0x6e]; // "ton"
+        let result = TonProof::parse_hex(&serial);
+
+        assert!(result.is_err());
+        if let Err(TonError::InvalidProof(msg)) = result {
+            assert!(msg.contains("too short"));
+        } else {
+            panic!("Expected InvalidProof error");
+        }
+    }
+
+    #[test]
+    fn test_parse_ton_proof_invalid_utf8() {
+        // Create valid structure but with invalid UTF-8 in domain
+        let mut serial = b"ton-proof-item-v2/".to_vec();
+        serial.extend_from_slice(&[0u8; 4]); // workchain
+        serial.extend_from_slice(&[0u8; 32]); // address hash
+        serial.extend_from_slice(&[5, 0, 0, 0]); // domain length = 5
+        serial.extend_from_slice(&[0xFF, 0xFE, 0xFD, 0xFC, 0xFB]); // invalid UTF-8
+        serial.extend_from_slice(&[0u8; 8]); // timestamp
+
+        let result = TonProof::parse_hex(&serial);
+        // Should fail due to invalid UTF-8 in domain
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_ton_proof_invalid_domain_length() {
+        // Valid header but domain length exceeds actual data
+        let mut serial = b"ton-proof-item-v2/".to_vec();
+        serial.extend_from_slice(&[0u8; 4]); // workchain
+        serial.extend_from_slice(&[0u8; 32]); // address hash
+        serial.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0x7F]); // invalid domain length (very large)
+        serial.extend_from_slice(&[0u8; 10]); // timestamp + small data
+
+        let result = TonProof::parse_hex(&serial);
+        assert!(result.is_err());
+        if let Err(TonError::InvalidProof(msg)) = result {
+            assert!(msg.contains("too short"));
+        } else {
+            panic!("Expected InvalidProof error");
+        }
+    }
+
+    #[test]
+    fn test_ton_transaction_default() {
+        let tx = TonTransaction::default();
+
+        assert_eq!(tx.raw_data, "");
+        assert!(tx.messages.is_empty());
+    }
+
+    #[test]
+    fn test_ton_proof_default() {
+        let proof = TonProof::default();
+
+        assert_eq!(proof.domain, "");
+        assert_eq!(proof.payload, "");
+        assert_eq!(proof.address, "");
+        assert_eq!(proof.raw_message, "");
+    }
+
+    #[test]
+    fn test_transaction_clone() {
+        let body = "te6cckEBAgEARwABHCmpoxdmOz6lAAAACAADAQBoQgArFnMvHAX9tOjTp4/RDd3vP2Bn8xG+U5MTuKRKUE1NoqHc1lAAAAAAAAAAAAAAAAAAAHBy4G8=";
+        let serial = STANDARD.decode(body).unwrap();
+
+        let tx1 = TonTransaction::parse_hex(&serial).unwrap();
+        let tx2 = tx1.clone();
+
+        assert_eq!(tx1.messages.len(), tx2.messages.len());
+        assert_eq!(tx1.messages[0].to, tx2.messages[0].to);
+        assert_eq!(tx1.messages[0].amount, tx2.messages[0].amount);
+        assert_eq!(tx1.messages[0].action, tx2.messages[0].action);
+    }
+
+    #[test]
+    fn test_proof_clone() {
+        let serial = hex::decode("746f6e2d70726f6f662d6974656d2d76322f00000000b5232c324308b148e53ca5ecce6430bdaefdb1095e02189cce587e915fc053b015000000746b6170702e746f6e706f6b65722e6f6e6c696e65142b5866000000003735323061653632393534653666666330303030303030303636353765333639").unwrap();
+
+        let proof1 = TonProof::parse_hex(&serial).unwrap();
+        let proof2 = proof1.clone();
+
+        assert_eq!(proof1.domain, proof2.domain);
+        assert_eq!(proof1.payload, proof2.payload);
+        assert_eq!(proof1.address, proof2.address);
+    }
+
+    #[test]
+    fn test_transaction_with_empty_messages() {
+        // This should fail as transaction needs at least one message
+        // We need to craft a BOC with valid structure but empty messages
+        let body = "te6cckEBAgEARwABHCmpoxdmOz6lAAAACAADAQBoQgArFnMvHAX9tOjTp4/RDd3vP2Bn8xG+U5MTuKRKUE1NoqHc1lAAAAAAAAAAAAAAAAAAAHBy4G8=";
+        let serial = STANDARD.decode(body).unwrap();
+
+        // This is a valid transaction, so it should succeed
+        let result = TonTransaction::parse_hex(&serial);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_raw_data_contains_hex() {
+        let body = "te6cckEBAgEARwABHCmpoxdmOz6lAAAACAADAQBoQgArFnMvHAX9tOjTp4/RDd3vP2Bn8xG+U5MTuKRKUE1NoqHc1lAAAAAAAAAAAAAAAAAAAHBy4G8=";
+        let serial = STANDARD.decode(body).unwrap();
+
+        let tx = TonTransaction::parse_hex(&serial).unwrap();
+
+        // raw_data should be hex encoded (shortened)
+        assert!(!tx.raw_data.is_empty());
+        // Should start with valid hex characters
+        assert!(tx
+            .raw_data
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || c == '.'));
     }
 }

@@ -132,14 +132,16 @@ UREncodeResult *GuiGetMoneroKeyimagesQrCodeData(void)
     SetLockScreen(false);
     UREncodeResult *encodeResult;
     void *data = g_isMulti ? g_urMultiResult->data : g_urResult->data;
+    uint8_t seed[64];
     do {
-        uint8_t seed[64];
-        int len = GetMnemonicType() == MNEMONIC_TYPE_BIP39 ? sizeof(seed) : GetCurrentAccountEntropyLen();
-        GetAccountSeed(GetCurrentAccountIndex(), seed, SecretCacheGetPassword());
+        int len = GetCurrentAccountSeedLen();
+        int ret = GetAccountSeed(GetCurrentAccountIndex(), seed, SecretCacheGetPassword());
+        CHECK_ERRCODE_BREAK("GetAccountSeed", ret);
         encodeResult = monero_generate_keyimage(data, seed, len, 0);
-        ClearSecretCache();
         CHECK_CHAIN_BREAK(encodeResult);
     } while (0);
+    memset_s(seed, sizeof(seed), 0, sizeof(seed));
+    ClearSecretCache();
     SetLockScreen(enable);
     return encodeResult;
 }
@@ -150,14 +152,16 @@ UREncodeResult *GuiGetMoneroSignedTransactionQrCodeData(void)
     SetLockScreen(false);
     UREncodeResult *encodeResult;
     void *data = g_isMulti ? g_urMultiResult->data : g_urResult->data;
+    uint8_t seed[64];
     do {
-        uint8_t seed[64];
-        int len = GetMnemonicType() == MNEMONIC_TYPE_BIP39 ? sizeof(seed) : GetCurrentAccountEntropyLen();
-        GetAccountSeed(GetCurrentAccountIndex(), seed, SecretCacheGetPassword());
+        int len = GetCurrentAccountSeedLen();
+        int ret = GetAccountSeed(GetCurrentAccountIndex(), seed, SecretCacheGetPassword());
+        CHECK_ERRCODE_BREAK("GetAccountSeed", ret);
         encodeResult = monero_generate_signature(data, seed, len, 0);
-        ClearSecretCache();
         CHECK_CHAIN_BREAK(encodeResult);
     } while (0);
+    memset_s(seed, sizeof(seed), 0, sizeof(seed));
+    ClearSecretCache();
     SetLockScreen(enable);
     return encodeResult;
 }
@@ -272,7 +276,7 @@ void GuiShowXmrTransactionOverview(lv_obj_t *parent, void *totalData)
         bool is_change = data->outputs->data[i].is_change;
         uint32_t addressY = 18 + 38 + i * 120 + addressOffset;
         char outputIndex[BUFFER_SIZE_16] = {0};
-        sprintf(outputIndex, "%d", i + 1);
+        snprintf(outputIndex, sizeof(outputIndex), "%zu", i + 1);
         label = GuiCreateIllustrateLabel(detilsContainer, outputIndex);
         lv_obj_align(label, LV_ALIGN_DEFAULT, 24, addressY);
         lv_obj_set_style_text_opa(label, 144, LV_PART_MAIN);
@@ -345,7 +349,7 @@ void GuiShowXmrTransactionDetails(lv_obj_t *parent, void *totalData)
 
     for (size_t i = 0; i < data->inputs->size; i++) {
         char inputIndex[BUFFER_SIZE_16] = {0};
-        sprintf(inputIndex, "Pubkey %d", i + 1);
+        snprintf(inputIndex, sizeof(inputIndex), "Pubkey %zu", i + 1);
         lv_obj_t *titleLabel = GuiCreateIllustrateLabel(inputsContainer, inputIndex);
         lv_obj_align(titleLabel, LV_ALIGN_DEFAULT, 24, 54 + i * 120);
         lv_obj_set_style_text_opa(titleLabel, 144, LV_PART_MAIN);
@@ -372,7 +376,7 @@ void GuiShowXmrTransactionDetails(lv_obj_t *parent, void *totalData)
     for (size_t i = 0; i < data->outputs->size; i++) {
         bool is_change = data->outputs->data[i].is_change;
         char outputIndex[BUFFER_SIZE_16] = {0};
-        sprintf(outputIndex, "Address %d", i + 1);
+        snprintf(outputIndex, sizeof(outputIndex), "Address %zu", i + 1);
         lv_obj_t *titleLabel = GuiCreateIllustrateLabel(outputsContainer, outputIndex);
         lv_obj_align(titleLabel, LV_ALIGN_DEFAULT, 24, 54 + i * 150);
         lv_obj_set_style_text_opa(titleLabel, 144, LV_PART_MAIN);

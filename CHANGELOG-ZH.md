@@ -1,3 +1,323 @@
+## 3.0.4 (2026-8-10)
+
+**Web3:**
+
+### 新增
+
+1. 支持 Solana CLI
+2. 支持通过 Lace Wallet 管理 BTC 和 ADA 资产
+
+### 优化
+
+1. 交易解析展示优化
+
+**Cypherpunk:**
+
+### 优化
+
+1. 交易解析展示优化
+
+**BTC Only:**
+
+### 优化
+
+1. 交易解析展示优化
+
+
+## 3.0.2 (2026-07-24)
+
+**Cypherpunk:**
+
+### 说明
+此版本仅用于支持 Zcash Ironwood 升级，仅适用于 Cypherpunk 版本。如无相关需求，请勿升级。升级后将无法降级回 3.0.0 Multi-Coin 或 Bitcoin-Only 固件；如误升级，需等待后续固件版本发布后才能切换回其他版本。升级前请务必确认您选择的是正确的固件版本。
+
+### 新增
+1. 支持 Zcash Ironwood升级
+1. 支持 Zcash 批量 PCZT 签名
+
+## 3.0.0 (2026-7-20)
+
+**Web3:**
+
+### 优化
+
+1. 忘记密码及密码强度判断优化；
+2. 安全策略优化
+3. AR 相关计算逻辑优化
+
+
+**Cypherpunk:**
+
+### 新增
+
+1. 忘记密码及密码强度判断优化；
+2. 安全策略优化
+
+
+**BTC Only:**
+
+### 新增
+
+1. 忘记密码及密码强度判断优化；
+2. 安全策略优化
+
+
+
+
+## 2.5.0(2026-6-29)
+
+**Web3:**
+
+### 优化
+
+1. 优化骰子助记词熵校验
+2. 优化解锁密码校验
+3. 优化 TON 交易 UI
+
+**BTC Only:**
+
+### 优化
+
+1. 优化骰子助记词熵校验
+2. 优化解锁密码校验
+
+**Cypherpunk:**
+
+### 新增
+
+1. 支持通过 Vizor 管理 ZEC
+
+### 优化
+1. 优化骰子助记词熵校验
+2. 优化解锁密码校验
+
+
+## 2.4.6 (2026-6-12)
+
+**Web3:**
+
+### 新增
+
+1. 支持 Babylon derive context hash call
+
+
+## 2.4.4 (2026-5-27)
+
+**Web3:**
+
+### 优化
+
+1. 移除 Leap Wallet 连接入口
+
+**Cypherpunk:**
+
+### 新增
+
+1. 支持 Zcash 使用 SLIP39 33词 Shamir Backup
+
+### Bug 修复
+
+1. 修复设备校验页面卡顿问题
+
+
+
+
+
+
+## 2.4.2(2026-4-23)
+
+**Web3:**
+
+### 新增
+
+1. 支持通过 NuFi 管理 TRON 资产
+
+2. 支持通过 Keystone Nexus 收发 Native SOL
+
+### 优化
+
+1. 移除 TON-only 钱包（注意：更新前请确保您TON-Only 钱包下的资产已转移到默认多币种钱包地址）
+
+2. 优化 BTC 交易解析
+
+3. 优化 SUI 交易解析
+
+4. 优化 TRON swap 交易解析
+
+5. 优化 Core 钱包交易解析
+
+6. 更新 Keplr icon
+
+
+
+**BTC Only:**
+
+### 优化
+
+1. 优化 BTC 交易解析
+
+
+
+**Cypherpunk:**
+
+### 优化
+
+1. 优化 BTC 交易解析
+
+2. 优化 ZEC 交易解析
+
+
+
+## 2.4.0 (2026-3-30)
+
+
+**Web3:**
+
+### 新增
+1. 升级固件更新安全机制
+2. 支持 X Layer 交易
+
+
+**BTC Only:**
+
+### 新增
+1. 升级固件更新安全机制
+
+
+**Cypherpunk:**
+
+### 新增
+1. 升级固件更新安全机制
+### 优化
+1. 更新 Zodl 钱包图标
+
+
+
+
+## 2.3.10(2026-3-4)
+
+**Web3:**
+
+### 新增
+1. 支持通过 Keystone Nexus 管理 ADA
+2. 支持通过 Gero 插件端管理 ADA
+
+
+**Cypherpunk:**
+
+### Bug 修复
+1. 修复了隐藏透明 ZEC 交易的签名问题
+
+
+
+## 2.3.8(2026-2-9)
+
+**Web3:**
+
+
+### 新增
+1. 支持通过 Nabox 管理 BTC、LTC、BCH、DOGE 和 TRON
+2. 支持通过 BULL 管理 BTC
+
+**BTC Only:**
+
+
+### 新增
+1. 支持通过 BULL 管理 BTC
+2. 新增西班牙语、日语和德语支持
+
+**Cypherpunk:**
+
+
+### 新增
+1. 支持通过 BULL 管理 BTC
+
+
+
+## 2.3.6(2026-1-22)
+
+**Web3:**
+
+### 新增
+1. 支持 ZEC 透明地址
+2. 支持通过 Keystone Nexus 管理 ZEC 透明地址
+
+### 优化
+1. 提升连接钱包的稳定性
+
+
+
+
+## 2.3.4(2026-1-6)
+
+
+**Web3:**
+
+### 新增
+1. 支持 LTC Native SegWit 地址
+2. 支持通过 Keystone Nexus 管理 LTC
+3. 支持通过 USB 连接 Jupiter 钱包插件端管理 SOL
+
+
+
+## 2.3.2(2025-12-24)
+
+
+**Web3:**
+### 新增
+1. 支持通过 Nabox 钱包管理 EVM 资产
+### 优化
+1. 优化 BTC 钱包连接入口 UI
+2. 优化 BTC change output 展示逻辑
+### Bug 修复
+1. 修复 TON-only 消息签名问题
+
+
+**BTC Only:**
+### 优化
+1. 优化 BTC change output 展示逻辑
+
+
+**Cypherpunk:**
+### 优化
+1. 优化 BTC change output 展示逻辑
+
+
+## 2.3.0(2025-12-02)
+
+**Web3:**
+
+### 新增
+1. 支持通过 BlueWallet 管理 BTC Taproot 地址
+### 优化
+1. 优化固件代码，增强整体稳健性
+2. 优化 BTC Sign Message 流程
+3. 优化 SOL Squads 多签交易解析
+### Bug 修复
+1. 修复 Passphrase 钱包下 Eternl 地址 path 类型同步问题
+
+**BTC Only:**
+
+### 新增
+1. 支持通过 BlueWallet 管理 BTC Taproot 地址
+### 优化
+1. 优化固件代码，增强整体稳健性
+2. 优化 BTC Sign Message 流程
+
+
+
+**Cypherpunk:**
+
+### 新增
+1. 支持通过 BlueWallet 管理 BTC Taproot 地址
+### 优化
+1. 优化固件代码，增强整体稳健性
+2. 优化 BTC Sign Message 流程 
+
+
+
+
+
 
 ## 2.2.20 (2025-11-10)
 

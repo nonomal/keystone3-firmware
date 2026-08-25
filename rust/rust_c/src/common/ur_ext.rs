@@ -63,8 +63,12 @@ use ur_registry::sui::sui_sign_hash_request::SuiSignHashRequest;
 use ur_registry::sui::sui_sign_request::SuiSignRequest;
 #[cfg(feature = "ton")]
 use ur_registry::ton::ton_sign_request::{DataType, TonSignRequest};
+#[cfg(feature = "tron")]
+use ur_registry::tron::tron_sign_request::TronSignRequest;
 #[cfg(feature = "zcash")]
 use ur_registry::zcash::zcash_pczt::ZcashPczt;
+#[cfg(feature = "zcash_cypherpunk")]
+use ur_registry::zcash::zcash_sign_batch::ZcashSignBatch;
 
 use super::ur::ViewType;
 
@@ -221,10 +225,29 @@ impl InferViewType for ZcashPczt {
     }
 }
 
+#[cfg(feature = "zcash_cypherpunk")]
+impl InferViewType for ZcashSignBatch {
+    fn infer(&self) -> Result<ViewType, URError> {
+        Ok(ViewType::ZcashBatchTx)
+    }
+}
+
 #[cfg(feature = "avalanche")]
 impl InferViewType for AvaxSignRequest {
     fn infer(&self) -> Result<ViewType, URError> {
         Ok(ViewType::AvaxTx)
+    }
+}
+
+#[cfg(feature = "tron")]
+impl InferViewType for TronSignRequest {
+    fn infer(&self) -> Result<ViewType, URError> {
+        match self.get_data_type() {
+            ur_registry::tron::tron_sign_request::DataType::Transaction => Ok(ViewType::TronTx),
+            ur_registry::tron::tron_sign_request::DataType::PersonalMessage => {
+                Ok(ViewType::TronPersonalMessage)
+            }
+        }
     }
 }
 
@@ -238,25 +261,43 @@ fn get_view_type_from_keystone(bytes: Vec<u8>) -> Result<ViewType, URError> {
         .ok_or(URError::NotSupportURTypeError("empty payload".to_string()))?;
     let result = match payload.content {
         Some(protoc::payload::Content::SignTx(sign_tx_content)) => {
+            #[cfg(feature = "bitcoin")]
+            if app_bitcoin::network::is_legacy_utxo_transaction(&sign_tx_content) {
+                if !app_bitcoin::network::is_supported_legacy_utxo_transaction(&sign_tx_content) {
+                    return Err(URError::NotSupportURTypeError(
+                        app_bitcoin::network::UNSUPPORTED_LEGACY_UTXO_MESSAGE.to_string(),
+                    ));
+                }
+                return match sign_tx_content.transaction.as_ref() {
+                    #[cfg(feature = "bch")]
+                    Some(protoc::sign_transaction::Transaction::BchTx(_)) => Ok(ViewType::BchTx),
+                    #[cfg(feature = "dash")]
+                    Some(protoc::sign_transaction::Transaction::DashTx(_)) => Ok(ViewType::DashTx),
+                    #[cfg(feature = "ltc")]
+                    Some(protoc::sign_transaction::Transaction::LtcTx(_)) => Ok(ViewType::LtcTx),
+                    _ => Err(URError::NotSupportURTypeError(
+                        app_bitcoin::network::UNSUPPORTED_LEGACY_UTXO_MESSAGE.to_string(),
+                    )),
+                };
+            }
             match sign_tx_content.coin_code.as_str() {
-                "BTC_NATIVE_SEGWIT" => ViewType::BtcNativeSegwitTx,
-                "BTC_SEGWIT" => ViewType::BtcSegwitTx,
-                "BTC_LEGACY" => ViewType::BtcLegacyTx,
-                "BTC" => ViewType::BtcSegwitTx,
-                #[cfg(feature = "ltc")]
-                "LTC" => ViewType::LtcTx,
-                #[cfg(feature = "doge")]
-                "DOGE" => ViewType::DogeTx,
-                #[cfg(feature = "dash")]
-                "DASH" => ViewType::DashTx,
-                #[cfg(feature = "bch")]
-                "BCH" => ViewType::BchTx,
                 #[cfg(feature = "ethereum")]
                 "ETH" => ViewType::EthTx,
                 #[cfg(feature = "tron")]
-                "TRON" => ViewType::TronTx,
-                #[cfg(feature = "xrp")]
-                "XRP" => ViewType::XRPTx,
+                "TRON" => {
+                    if let Some(protoc::sign_transaction::Transaction::TronTx(tx)) =
+                        sign_tx_content.transaction
+                    {
+                        if tx.memo.starts_with("=:") || tx.memo.to_uppercase().starts_with("SWAP:")
+                        {
+                            ViewType::TronSwapTx
+                        } else {
+                            ViewType::TronTx
+                        }
+                    } else {
+                        ViewType::TronTx
+                    }
+                }
                 _ => {
                     return Err(URError::ProtobufDecodeError(format!(
                         "invalid coin_code {:?}",
@@ -299,7 +340,23 @@ impl InferViewType for Bytes {
                 return Err(URError::UrDecodeError("invalid data".to_string()));
             }
             #[cfg(feature = "multi-coins")]
-            Err(_e) => get_view_type_from_keystone(self.get_bytes()),
+            Err(_e) => {
+                let view_type = get_view_type_from_keystone(self.get_bytes())?;
+                match view_type {
+                    ViewType::BtcNativeSegwitTx
+                    | ViewType::BtcSegwitTx
+                    | ViewType::BtcLegacyTx
+                    | ViewType::LtcTx
+                    | ViewType::DogeTx
+                    | ViewType::DashTx
+                    | ViewType::BchTx
+                    | ViewType::EthTx => Err(URError::NotSupportURTypeError(
+                        "bitcoin-family and ethereum transactions are not supported via ur:bytes"
+                            .to_string(),
+                    )),
+                    _ => Ok(view_type),
+                }
+            }
             #[cfg(feature = "btc-only")]
             Err(_e) => {
                 if app_bitcoin::multi_sig::wallet::is_valid_xpub_config(&self) {
@@ -308,7 +365,9 @@ impl InferViewType for Bytes {
                 if app_bitcoin::multi_sig::wallet::is_valid_wallet_config(&self) {
                     return Ok(ViewType::MultisigWalletImport);
                 }
-                get_view_type_from_keystone(self.get_bytes())
+                Err(URError::NotSupportURTypeError(
+                    "bitcoin transactions are not supported via ur:bytes".to_string(),
+                ))
             }
             #[cfg(not(any(feature = "btc-only", feature = "multi-coins")))]
             Err(_e) => Err(URError::UrDecodeError("invalid data".to_string())),
@@ -326,10 +385,11 @@ impl InferViewType for BtcSignRequest {
 #[cfg(feature = "solana")]
 impl InferViewType for SolSignRequest {
     fn infer(&self) -> Result<ViewType, URError> {
-        if app_solana::validate_tx(&mut self.get_sign_data()) {
-            return Ok(ViewType::SolanaTx);
+        match app_solana::classify_payload(&self.get_sign_data()) {
+            app_solana::SolanaPayloadType::Transaction
+            | app_solana::SolanaPayloadType::MalformedTransaction => Ok(ViewType::SolanaTx),
+            app_solana::SolanaPayloadType::Message => Ok(ViewType::SolanaMessage),
         }
-        Ok(ViewType::SolanaMessage)
     }
 }
 
@@ -394,6 +454,12 @@ impl InferViewType for QRHardwareCall {
     fn infer(&self) -> Result<ViewType, URError> {
         match self.get_call_type() {
             CallType::KeyDerivation => Ok(ViewType::KeyDerivationRequest),
+            #[cfg(feature = "multi-coins")]
+            CallType::DeriveContextHash => Ok(ViewType::DeriveContextHashRequest),
+            #[cfg(not(feature = "multi-coins"))]
+            CallType::DeriveContextHash => Err(URError::NotSupportURTypeError(
+                "derive-context-hash is only supported on multi-coins".to_string(),
+            )),
         }
     }
 }
@@ -410,14 +476,13 @@ mod tests {
 
     #[cfg(feature = "ltc")]
     #[test]
-    fn test_parse_ur_type() {
+    fn test_reject_ltc_keystone_bytes() {
         {
             //ltc legacy
             let crypto = Bytes::new(
                 Vec::from_hex("1f8b0800000000000003558dbb4a03411846b36be192266baa902a2c8212583233ffdc162ccc0d63349268306837333b2b1875558c0979061fc0c242ec051b0b0b5b0b3bc156b0147d005bd30a1f070e1cf83c379feb9dd7d3d896bae7e9456ad2a3e2a7ebb9794f20d16c36783d7873b3739bfd7a7e9131ce12442124dcaa902a2dc32851101a3086608b2dc4b498293d7e3dddfda2654f5fbbdeeb82ff5e2e66825b27bbaa58a48d564a598cf54c4052a096c4334a42c1320b11610c63c60d5560a5b442c70669a264c239f84e713d5b43444422a20a4b6c1281ad8a88c51a04274c01235672c18d4418255881e1d6628230301dc78831008349e1e5fedb0b72c7151a2d55c85205cd5641e5301b74d6b8185407fbfcb0795c8dc4e660d4dc6ef787b59a386d75d2dde4e0d0ff7cb8720a9920535e99e583eaeede683c9d801e9eb5b6366abd8bbdc664e7723a1df346efa43d4efd9b9f8ff98213e43affcf4acfdd3f9997819c79010000").unwrap()
             );
-            let view_type = InferViewType::infer(&crypto).unwrap();
-            assert_eq!(ViewType::LtcTx, view_type);
+            assert!(InferViewType::infer(&crypto).is_err());
         }
     }
 }

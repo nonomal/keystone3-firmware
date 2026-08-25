@@ -16,6 +16,8 @@
 #include "gui_page.h"
 #include "gui_setting_widgets.h"
 
+#define DICE_ROLLS_256_BIT_MIN_LEN      100
+
 typedef enum {
     CREATE_SHARE_SELECT_SLICE = 0,
     CREATE_SHARE_CUSTODIAN,
@@ -67,7 +69,7 @@ typedef struct {
 static ShareBackupWidget_t g_shareBackupTile;
 static ShareBackupWidget_t g_shareConfirmTile;
 
-static uint8_t g_selectCnt = 20;
+static uint8_t g_selectCnt = SLIP39_DEFAULT_MNEMONIC_WORDS;
 static uint8_t g_pressedBtn[SLIP39_MNEMONIC_WORDS_MAX + 1];
 static uint8_t g_pressedBtnFlag[SLIP39_MNEMONIC_WORDS_MAX + 1];
 static uint8_t g_currId = 0;
@@ -77,6 +79,28 @@ static uint8_t g_entropyMethod;
 static PageWidget_t *g_pageWidget;
 static void SelectParseCntHandler(lv_event_t *e);
 static void SelectCheckBoxHandler(lv_event_t* e);
+
+static bool DiceRollsNotEnoughForWordCnt(uint8_t wordCnt)
+{
+    return (g_entropyMethod & ENTROPY_TYPE_MASK) &&
+           wordCnt == SLIP39_MNEMONIC_33_WORDS &&
+           SecretCacheGetDiceRollsLen() < DICE_ROLLS_256_BIT_MIN_LEN;
+}
+
+static void ReturnToDiceRollsHandler(lv_event_t *e)
+{
+    GUI_DEL_OBJ(g_noticeWindow)
+    GuiCloseCurrentWorkingView();
+}
+
+static void ShowDiceRollsNotEnoughHint(void)
+{
+    GUI_DEL_OBJ(g_noticeWindow)
+    g_noticeWindow = GuiCreateConfirmHintBox(&imgWarn, _("dice_roll_100_required_title"),
+                     _("dice_roll_100_required_desc"), NULL, _("OK"), ORANGE_COLOR);
+    lv_obj_t *btn = GuiGetHintBoxRightBtn(g_noticeWindow);
+    lv_obj_add_event_cb(btn, ReturnToDiceRollsHandler, LV_EVENT_CLICKED, NULL);
+}
 
 static void ShareUpdateTileHandler(lv_event_t *e)
 {
@@ -123,7 +147,10 @@ void GuiCreateShareUpdateMnemonic(void *signalParam, uint16_t paramLen)
     GuiUpdateMnemonicKeyBoard(g_shareConfirmTile.keyBoard, g_randomBuff, true);
     GuiStopCircleAroundAnimation();
     if (g_pageWidget != NULL && g_createShareTileView.currentTile == CREATE_SHARE_BACKUPFROM) {
-        SetRightBtnLabel(g_pageWidget->navBarWidget, NVS_BAR_WORD_SELECT, g_selectCnt == 20 ? "20" : "33");
+        _Static_assert(SLIP39_MNEMONIC_WORDS_MAX <= 255, "max mnemonic words <= 255");
+        char buf[4];
+        snprintf_s(buf, sizeof(buf), "%d", g_selectCnt);
+        SetRightBtnLabel(g_pageWidget->navBarWidget, NVS_BAR_WORD_SELECT, buf);
         SetRightBtnCb(g_pageWidget->navBarWidget, SelectParseCntHandler, NULL);
     }
 }
@@ -346,7 +373,7 @@ static void GuiShareBackupWidget(lv_obj_t *parent)
     lv_obj_refr_size(label);
     height -= lv_obj_get_self_height(label);
 
-    g_shareBackupTile.keyBoard = GuiCreateMnemonicKeyBoard(parent, NULL, g_selectCnt == 20 ? KEY_STONE_MNEMONIC_20 : KEY_STONE_MNEMONIC_33, NULL);
+    g_shareBackupTile.keyBoard = GuiCreateMnemonicKeyBoard(parent, NULL, g_selectCnt == SLIP39_MNEMONIC_20_WORDS ? KEY_STONE_MNEMONIC_20 : KEY_STONE_MNEMONIC_33, NULL);
     lv_obj_align_to(g_shareBackupTile.keyBoard->cont, label, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 36);
     lv_obj_set_size(g_shareBackupTile.keyBoard->cont, 408, height);
 
@@ -376,13 +403,16 @@ static void GuiShareConfirmWidget(lv_obj_t *parent)
 
     g_shareConfirmTile.noticeLabel = label;
 
-    g_shareConfirmTile.keyBoard = GuiCreateMnemonicKeyBoard(parent, MnemonicConfirmHandler, g_selectCnt == 20 ? KEY_STONE_MNEMONIC_20 : KEY_STONE_MNEMONIC_33, NULL);
+    g_shareConfirmTile.keyBoard = GuiCreateMnemonicKeyBoard(parent, MnemonicConfirmHandler, g_selectCnt == SLIP39_MNEMONIC_20_WORDS ? KEY_STONE_MNEMONIC_20 : KEY_STONE_MNEMONIC_33, NULL);
     lv_obj_align_to(g_shareConfirmTile.keyBoard->cont, label, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 36);
 }
 
 void GuiCreateShareInit(uint8_t entropyMethod)
 {
     g_entropyMethod = entropyMethod;
+    if (DiceRollsNotEnoughForWordCnt(g_selectCnt)) {
+        g_selectCnt = SLIP39_MNEMONIC_20_WORDS;
+    }
     g_pageWidget = CreatePageWidget();
     lv_obj_t *cont = g_pageWidget->contentZone;
     lv_obj_t *tileView = GuiCreateTileView(cont);
@@ -465,7 +495,10 @@ int8_t GuiCreateShareNextTile(const char *passphrase)
     case CREATE_SHARE_CUSTODIAN:
         lv_obj_clear_flag(g_shareBackupTile.nextCont, LV_OBJ_FLAG_HIDDEN);
         if (g_createShareTileView.currentSlice == 0) {
-            SetRightBtnLabel(g_pageWidget->navBarWidget, NVS_BAR_WORD_SELECT, g_selectCnt == 20 ? "20" : "33");
+            _Static_assert(SLIP39_MNEMONIC_WORDS_MAX <= 255, "max mnemonic words <= 255");
+            char buf[4];
+            snprintf_s(buf, sizeof(buf), "%d", g_selectCnt);
+            SetRightBtnLabel(g_pageWidget->navBarWidget, NVS_BAR_WORD_SELECT, buf);
             SetRightBtnCb(g_pageWidget->navBarWidget, SelectParseCntHandler, NULL);
         }
         break;
@@ -537,7 +570,7 @@ void GuiCreateShareDeInit(void)
         g_pressedBtnFlag[i] = 0;
     }
     g_currId = 0;
-    g_selectCnt = 20;
+    g_selectCnt = SLIP39_DEFAULT_MNEMONIC_WORDS;
     g_selectSliceTile.memberCnt = SLIP39_DEFAULT_MEMBER_COUNT;
     g_selectSliceTile.memberThreshold = SLIP39_DEFAULT_MEMBER_THRESHOLD;
     memset_s(g_randomBuff, 512, 0, 512);
@@ -559,7 +592,10 @@ void GuiCreateShareRefresh(void)
         SetNavBarLeftBtn(g_pageWidget->navBarWidget, NVS_BAR_RETURN, CloseCurrentViewHandler, NULL);
     } else if (g_createShareTileView.currentTile == CREATE_SHARE_BACKUPFROM) {
         SetNavBarLeftBtn(g_pageWidget->navBarWidget, NVS_BAR_CLOSE, StopCreateViewHandler, NULL);
-        SetRightBtnLabel(g_pageWidget->navBarWidget, NVS_BAR_WORD_SELECT, g_selectCnt == 20 ? "20" : "33");
+        _Static_assert(SLIP39_MNEMONIC_WORDS_MAX <= 255, "max mnemonic words <= 255");
+        char buf[4];
+        snprintf_s(buf, sizeof(buf), "%d", g_selectCnt);
+        SetRightBtnLabel(g_pageWidget->navBarWidget, NVS_BAR_WORD_SELECT, buf);
         SetRightBtnCb(g_pageWidget->navBarWidget, SelectParseCntHandler, NULL);
     } else if (g_createShareTileView.currentTile == CREATE_SHARE_CONFIRM) {
         SetNavBarLeftBtn(g_pageWidget->navBarWidget, NVS_BAR_CLOSE, StopCreateViewHandler, NULL);
@@ -577,6 +613,7 @@ static void SelectParseCntHandler(lv_event_t *e)
 {
     static uint32_t currentIndex = 0;
     lv_obj_t *checkBox = NULL;
+    lv_obj_t *checkedCheckBox = NULL;
     g_noticeWindow = GuiCreateHintBox(282);
     lv_obj_add_event_cb(lv_obj_get_child(g_noticeWindow, 0), CloseHintBoxHandler, LV_EVENT_CLICKED, &g_noticeWindow);
     lv_obj_t *label = GuiCreateIllustrateLabel(g_noticeWindow, _("single_phrase_word_amount_select"));
@@ -591,14 +628,17 @@ static void SelectParseCntHandler(lv_event_t *e)
         checkBox = GuiCreateSingleCheckBox(g_noticeWindow, _("wallet_phrase_33words"));
         lv_obj_align(checkBox, LV_ALIGN_DEFAULT, 30, 618 + 100);
         lv_obj_add_state(checkBox, LV_STATE_CHECKED);
+        checkedCheckBox = checkBox;
     } else {
         checkBox = GuiCreateSingleCheckBox(g_noticeWindow, _("wallet_phrase_20words"));
         lv_obj_align(checkBox, LV_ALIGN_DEFAULT, 30, 630);
         lv_obj_add_state(checkBox, LV_STATE_CHECKED);
+        checkedCheckBox = checkBox;
         checkBox = GuiCreateSingleCheckBox(g_noticeWindow, _("wallet_phrase_33words"));
         lv_obj_align(checkBox, LV_ALIGN_DEFAULT, 30, 618 + 100);
     }
 
+    currentIndex = lv_obj_get_index(checkedCheckBox);
     lv_obj_add_event_cb(g_noticeWindow, SelectCheckBoxHandler, LV_EVENT_CLICKED, &currentIndex);
 }
 
@@ -612,7 +652,7 @@ static void SelectCheckBoxHandler(lv_event_t* e)
     lv_obj_t *actCb = lv_event_get_target(e);
     lv_obj_t *oldCb = lv_obj_get_child(g_noticeWindow, *active_id);
 
-    if (actCb == g_noticeWindow) {
+    if (actCb == g_noticeWindow || oldCb == NULL || !lv_obj_check_type(actCb, &lv_checkbox_class)) {
         return;
     }
     Vibrate(SLIGHT);
@@ -634,6 +674,10 @@ static void SelectCheckBoxHandler(lv_event_t* e)
             }
         }
     } else if (!strcmp(currText, _("wallet_phrase_33words"))) {
+        if (DiceRollsNotEnoughForWordCnt(SLIP39_MNEMONIC_33_WORDS)) {
+            ShowDiceRollsNotEnoughHint();
+            return;
+        }
         SetRightBtnLabel(g_pageWidget->navBarWidget, NVS_BAR_WORD_SELECT, "33");
         if (g_selectCnt != 33) {
             g_selectCnt = 33;

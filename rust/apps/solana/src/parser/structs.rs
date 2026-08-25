@@ -1,11 +1,18 @@
 use alloc::string::{String, ToString};
 
-use crate::parser::overview::SolanaOverview;
+use alloc::vec::Vec;
+
+use crate::parser::overview::{ProgramOverviewGeneral, SolanaOverview};
 
 #[derive(Clone, Debug)]
 pub struct ParsedSolanaTx {
     pub display_type: SolanaTxDisplayType,
     pub overview: SolanaOverview,
+    /// Parsed sibling instructions which must be shown after a specialized
+    /// overview such as Jupiter. This keeps the richer primary UI without
+    /// hiding any other instruction committed by the signature.
+    pub additional_overviews: Vec<ProgramOverviewGeneral>,
+    pub unknown_programs: Vec<String>,
     pub detail: String,
     pub network: String,
 }
@@ -32,6 +39,28 @@ impl ToString for SolanaTxDisplayType {
             SolanaTxDisplayType::SquadsV4 => "SquadsV4".to_string(),
             SolanaTxDisplayType::TokenTransfer => "TokenTransfer".to_string(),
             SolanaTxDisplayType::JupiterV6 => "JupiterV6".to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_types_have_stable_labels() {
+        let cases = [
+            (SolanaTxDisplayType::Transfer, "Transfer"),
+            (SolanaTxDisplayType::TokenTransfer, "TokenTransfer"),
+            (SolanaTxDisplayType::Vote, "Vote"),
+            (SolanaTxDisplayType::General, "General"),
+            (SolanaTxDisplayType::Unknown, "Unknown"),
+            (SolanaTxDisplayType::SquadsV4, "SquadsV4"),
+            (SolanaTxDisplayType::JupiterV6, "JupiterV6"),
+        ];
+
+        for (display_type, expected) in cases {
+            assert_eq!(display_type.to_string(), expected);
         }
     }
 }

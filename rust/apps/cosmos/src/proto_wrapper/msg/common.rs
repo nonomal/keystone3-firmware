@@ -13,6 +13,7 @@ use alloc::boxed::Box;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
+use crate::utils::sha256_digest;
 use crate::CosmosError;
 
 pub fn map_messages(messages: &[Any]) -> Result<Vec<Box<dyn Msg>>, CosmosError> {
@@ -151,6 +152,7 @@ pub fn map_messages(messages: &[Any]) -> Result<Vec<Box<dyn Msg>>, CosmosError> 
                 message_vec.push(Box::new(NotSupportMessage {
                     type_url: other.to_string(),
                     err: "the type is not support!".to_string(),
+                    data_digest: format!("0x{}", hex::encode(sha256_digest(&message.value))),
                 }));
             }
         }

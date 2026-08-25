@@ -26,8 +26,7 @@ void GetSoftWareVersion(char *version)
     if (SOFTWARE_VERSION_BUILD % 2 == 0) {
         snprintf(version, SOFTWARE_VERSION_MAX_LEN, "%s v%d.%d.%d%s", _("about_info_firmware_version_head"), SOFTWARE_VERSION_MAJOR - SOFTWARE_VERSION_MAJOR_OFFSET, SOFTWARE_VERSION_MINOR, SOFTWARE_VERSION_BUILD, SOFTWARE_VERSION_SUFFIX);
     } else {
-        snprintf(version, SOFTWARE_VERSION_MAX_LEN, "%s v%d.%d.%d(beta%d)%s",
-                 _("about_info_firmware_version_head"),
+        snprintf(version, SOFTWARE_VERSION_MAX_LEN, "v%d.%d.%d(beta%d)",
                  SOFTWARE_VERSION_MAJOR - SOFTWARE_VERSION_MAJOR_OFFSET,
                  SOFTWARE_VERSION_MINOR,
                  SOFTWARE_VERSION_BUILD,
@@ -83,6 +82,23 @@ void GetBootVersionNumber(char *version)
     GetBootSoftwareVersion(&major, &minor, &build);
     snprintf(version, SOFTWARE_VERSION_MAX_LEN, "%d.%d.%d", major, minor, build);
 }
+
+#ifndef COMPILE_SIMULATOR
+bool NeedUpdateBoot(void)
+{
+    #ifndef BUILD_PRODUCTION
+        return false;
+    #endif
+    uint32_t major, minor, build;
+    if (GetBootSoftwareVersion(&major, &minor, &build) == false) {
+        return true;
+    }
+    if (major == 0 && minor == 3 && build == 0) {
+        return false;
+    }
+    return true;
+}
+#endif
 
 bool GetBootSoftwareVersion(uint32_t *major, uint32_t *minor, uint32_t *build)
 {

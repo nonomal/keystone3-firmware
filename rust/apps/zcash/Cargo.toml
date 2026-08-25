@@ -11,12 +11,37 @@ rust_tools = { workspace = true }
 app_utils = { workspace = true }
 bitcoin = { workspace = true }
 thiserror = { workspace = true }
-zcash_vendor = { workspace = true }
+zcash_vendor = { workspace = true, default-features = false}
 hex = { workspace = true }
-bitvec = {version = "1.0.1", default-features = false, features = ["alloc"]}
+bitvec = { version = "1.0.1", default-features = false, features = ["alloc"] }
 blake2b_simd = { workspace = true }
 rand_core = { workspace = true, features = ["getrandom"] }
 zcash_note_encryption = "0.4.1"
+postcard = { version = "1.0.3", features = ["alloc"] }
+serde = { workspace = true }
+serde_with = { version = "3.11.0", features = [
+    "alloc",
+    "macros",
+], default-features = false }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 keystore = { path = "../../keystore" }
+pczt = { version = "0.8.0-rc.1", default-features = false, features = ["io-finalizer", "orchard", "sapling", "spend-finalizer", "transparent", "zcp-builder"] }
+zcash_primitives = { version = "0.29.0", default-features = false, features = ["circuits", "test-dependencies", "transparent-inputs"] }
+incrementalmerkletree = { version = "0.8.2", default-features = false }
+shardtree = "0.6.2"
+# Nameable only so the transparent-only `legacy_test_support` can spell the
+# `BuildConfig::orchard_pool_bundle_type` value; orchard is already built transitively
+# via the `zcash_primitives` dev-dependency.
+orchard = { version = "0.15.1", default-features = false }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(coverage_nightly)',
+] }
+
+[features]
+default = ["cypherpunk"]
+multi_coins = ["zcash_vendor/multi_coins", "keystore/multi_coins"]
+cypherpunk = ["zcash_vendor/cypherpunk", "keystore/cypherpunk"]

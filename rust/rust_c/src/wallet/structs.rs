@@ -14,6 +14,8 @@ use crate::common::types::{Ptr, PtrString, PtrT};
 use crate::common::utils::{convert_c_char, recover_c_char};
 use crate::{check_and_free_ptr, free_str_ptr, impl_c_ptr, make_free_method};
 
+const MAX_KEY_DERIVATION_SCHEMAS: usize = 24;
+
 #[repr(C)]
 pub struct QRHardwareCallData {
     pub call_type: PtrString,
@@ -43,8 +45,14 @@ impl TryFrom<&mut QRHardwareCall> for QRHardwareCallData {
     fn try_from(value: &mut QRHardwareCall) -> Result<Self, Self::Error> {
         match value.get_params() {
             CallParams::KeyDerivation(data) => {
-                let schemas = data
-                    .get_schemas()
+                let source_schemas = data.get_schemas();
+                if source_schemas.is_empty() || source_schemas.len() > MAX_KEY_DERIVATION_SCHEMAS {
+                    return Err(RustCError::InvalidData(
+                        "invalid key derivation schema count".to_string(),
+                    ));
+                }
+
+                let schemas = source_schemas
                     .iter()
                     .map(KeyDerivationSchema::try_from)
                     .collect::<Result<Vec<KeyDerivationSchema>, RustCError>>()?;
@@ -53,6 +61,11 @@ impl TryFrom<&mut QRHardwareCall> for QRHardwareCallData {
                 Ok(Self {
                     call_type: convert_c_char(match value.get_call_type() {
                         CallType::KeyDerivation => "key_derivation".to_string(),
+                        CallType::DeriveContextHash => {
+                            return Err(RustCError::InvalidData(
+                                "unexpected derive-context-hash params".to_string(),
+                            ))
+                        }
                     }),
                     origin: convert_c_char(value.get_origin().unwrap_or("unknown".to_string())),
                     key_derivation: KeyDerivationRequestData {
@@ -63,6 +76,10 @@ impl TryFrom<&mut QRHardwareCall> for QRHardwareCallData {
                     version: convert_c_char(value.get_version().to_string()),
                 })
             }
+            // derive-context-hash uses its own parser (wallet::babylon); reject here.
+            CallParams::DeriveContextHash(_) => Err(RustCError::InvalidData(
+                "use parse_derive_context_hash for derive-context-hash calls".to_string(),
+            )),
         }
     }
 }

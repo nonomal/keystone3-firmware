@@ -19,7 +19,7 @@ pub mod structs;
 mod utils;
 
 impl ParsedCosmosTx {
-    pub fn build(data: &Vec<u8>, data_type: DataType) -> Result<Self> {
+    pub fn build(data: &[u8], data_type: DataType) -> Result<Self> {
         match data_type {
             DataType::Amino => Self::build_from_amino(data),
             DataType::Direct => Self::build_from_direct(data),
@@ -42,10 +42,10 @@ impl ParsedCosmosTx {
             MsgOverview::Transfer(_) => CosmosTxDisplayType::Transfer,
             MsgOverview::Vote(_) => CosmosTxDisplayType::Vote,
             MsgOverview::Message(_) => CosmosTxDisplayType::Message,
-            // _ => CosmosTxDisplayType::Unknown,
+            MsgOverview::Unknown(_) => CosmosTxDisplayType::Unknown,
         }
     }
-    fn build_overview_from_amino(data: Value) -> Result<CosmosTxOverview> {
+    fn build_overview_from_amino(data: &Value) -> Result<CosmosTxOverview> {
         let chain_id = data["chain_id"].as_str().unwrap_or("");
         let kind = CosmosTxOverview::from_value(&data["msgs"])?;
         let common = CommonOverview {
@@ -58,11 +58,15 @@ impl ParsedCosmosTx {
         })
     }
 
-    fn build_detail_from_amino(data: Value) -> Result<String> {
+    fn build_detail_from_amino(data: &Value) -> Result<String> {
         let chain_id = data["chain_id"].as_str().unwrap_or("");
         let common = CommonDetail {
             network: get_network_by_chain_id(chain_id)?,
             chain_id: chain_id.to_string(),
+            memo: data["memo"]
+                .as_str()
+                .filter(|memo| !memo.is_empty())
+                .map(ToString::to_string),
             fee: format_fee_from_value(data["fee"].clone()).ok(),
         };
         let kind = CosmosTxDetail::from_value(&data["msgs"])?;
@@ -71,31 +75,32 @@ impl ParsedCosmosTx {
                 &common.to_unknown(),
             )?);
         }
-        if let MsgDetail::Message(msg) = &kind[0] {
-            return Ok(serde_json::to_string::<DetailMessage>(msg)?);
+        if kind.len() == 1 {
+            if let MsgDetail::Message(msg) = &kind[0] {
+                return Ok(serde_json::to_string::<DetailMessage>(msg)?);
+            }
         }
         let detail = serde_json::to_string::<CosmosTxDetail>(&CosmosTxDetail { common, kind })?;
         Ok(detail)
     }
 
-    fn build_from_amino(data: &Vec<u8>) -> Result<Self> {
-        let v: Value = from_slice(data.as_slice())?;
-        let overview = Self::build_overview_from_amino(v.clone())?;
+    fn build_from_value(v: &Value) -> Result<Self> {
         Ok(Self {
-            overview,
-            detail: Self::build_detail_from_amino(v.clone())?,
+            overview: Self::build_overview_from_amino(v)?,
+            detail: Self::build_detail_from_amino(v)?,
         })
     }
 
-    fn build_from_direct(data: &Vec<u8>) -> Result<Self> {
+    fn build_from_amino(data: &[u8]) -> Result<Self> {
+        let v: Value = from_slice(data)?;
+        Self::build_from_value(&v)
+    }
+
+    fn build_from_direct(data: &[u8]) -> Result<Self> {
         let sign_doc = SignDoc::parse(data)?;
         let doc_str = serde_json::to_string(&sign_doc)?;
         let v: Value = from_str(doc_str.as_str())?;
-        let overview = Self::build_overview_from_amino(v.clone())?;
-        Ok(Self {
-            overview,
-            detail: Self::build_detail_from_amino(v.clone())?,
-        })
+        Self::build_from_value(&v)
     }
 }
 
@@ -112,8 +117,7 @@ mod tests {
     fn test_parse_cosmos_send_amino_json() {
         //{"account_number": String("1674671"), "chain_id": String("cosmoshub-4"), "fee": Object {"amount": Array [Object {"amount": String("2583"), "denom": String("uatom")}], "gas": String("103301")}, "memo": String(""), "msgs": Array [Object {"type": String("cosmos-sdk/MsgSend"), "value": Object {"amount": Array [Object {"amount": String("12000"), "denom": String("uatom")}], "from_address": String("cosmos17u02f80vkafne9la4wypdx3kxxxxwm6f2qtcj2"), "to_address": String("cosmos1kwml7yt4em4en7guy6het2q3308u73dff983s3")}}], "sequence": String("2")}
         let raw_tx = "7B226163636F756E745F6E756D626572223A2231363734363731222C22636861696E5F6964223A22636F736D6F736875622D34222C22666565223A7B22616D6F756E74223A5B7B22616D6F756E74223A2232353833222C2264656E6F6D223A227561746F6D227D5D2C22676173223A22313033333031227D2C226D656D6F223A22222C226D736773223A5B7B2274797065223A22636F736D6F732D73646B2F4D736753656E64222C2276616C7565223A7B22616D6F756E74223A5B7B22616D6F756E74223A223132303030222C2264656E6F6D223A227561746F6D227D5D2C2266726F6D5F61646472657373223A22636F736D6F733137753032663830766B61666E65396C61347779706478336B78787878776D3666327174636A32222C22746F5F61646472657373223A22636F736D6F73316B776D6C37797434656D34656E37677579366865743271333330387537336466663938337333227D7D5D2C2273657175656E6365223A2232227D";
-        let result =
-            ParsedCosmosTx::build(&hex::decode(raw_tx).unwrap().to_vec(), DataType::Amino).unwrap();
+        let result = ParsedCosmosTx::build(&hex::decode(raw_tx).unwrap(), DataType::Amino).unwrap();
         let overview = result.overview;
         assert_eq!("Cosmos Hub", overview.common.network);
         match overview.kind[0].clone() {
@@ -133,7 +137,6 @@ mod tests {
             "common": {
                 "Network": "Cosmos Hub",
                 "Chain ID": "cosmoshub-4",
-                "Max Fee": "266.826483 ATOM",
                 "Fee": "0.002583 ATOM",
                 "Gas Limit": "103301"
             },
@@ -183,7 +186,6 @@ mod tests {
                 "Network": "Evmos Testnet",
                 "Chain ID": "evmos_9000-4",
                 "Fee": "2625000000000000 atevmos",
-                "Max Fee": "275625000000000000000 atevmos",
                 "Gas Limit": "105000",
             },
             "kind": [
@@ -204,8 +206,7 @@ mod tests {
         //  Object {"account_number": Number(2318430), "Chain ID": String("evmos_9000-4"), "Fee": Object {"amount": Array [Object {"amount": String("8750000000000000"), "denom": String("atevmos")}], "gas": Number(350000), "granter": String(""), "payer": String("")}, "memo": String(""), "msgs": Array [Object {"type": String("/cosmos.staking.v1beta1.MsgDelegate"), "Value": Object {"amount": Object {"amount": String("10000000000000000"), "denom": String("atevmos")}, "delegator_address": String("evmos1tqsdz785sqjnlggee0lwxjwfk6dl36ae2uf9er"), "validator_address": String("evmosvaloper10t6kyy4jncvnevmgq6q2ntcy90gse3yxa7x2p4")}}]}
         let raw_tx = "0AAC010AA9010A232F636F736D6F732E7374616B696E672E763162657461312E4D736744656C65676174651281010A2C65766D6F7331747173647A37383573716A6E6C67676565306C77786A77666B36646C33366165327566396572123365766D6F7376616C6F706572313074366B7979346A6E63766E65766D67713671326E74637939306773653379786137783270341A1C0A07617465766D6F7312113130303030303030303030303030303030127C0A570A4F0A282F65746865726D696E742E63727970746F2E76312E657468736563703235366B312E5075624B657912230A21039F4E693730F116E7AB01DAC46B94AD4FCABC3CA7D91A6B121CC26782A8F2B8B212040A02080112210A1B0A07617465766D6F7312103837353030303030303030303030303010B0AE151A0C65766D6F735F393030302D3420DEC08D01";
         let result =
-            ParsedCosmosTx::build(&hex::decode(raw_tx).unwrap().to_vec(), DataType::Direct)
-                .unwrap();
+            ParsedCosmosTx::build(&hex::decode(raw_tx).unwrap(), DataType::Direct).unwrap();
         let overview = result.overview;
         assert_eq!("Evmos Testnet", overview.common.network);
         assert_eq!(CosmosTxDisplayType::Delegate, overview.display_type);
@@ -231,14 +232,13 @@ mod tests {
                 "Chain ID": "evmos_9000-4",
                 "Fee": "8750000000000000 atevmos",
                 "Gas Limit": "350000",
-                "Max Fee": "3062500000000000000000 atevmos",
             },
             "kind": [
                 {
                     "Method": "Delegate",
                     "Value": "10000000000000000 atevmos",
-                    "From": "evmos1tqsdz785sqjnlggee0lwxjwfk6dl36ae2uf9er",
-                    "To": "evmosvaloper10t6kyy4jncvnevmgq6q2ntcy90gse3yxa7x2p4"
+                    "Delegator": "evmos1tqsdz785sqjnlggee0lwxjwfk6dl36ae2uf9er",
+                    "Validator": "evmosvaloper10t6kyy4jncvnevmgq6q2ntcy90gse3yxa7x2p4"
                 }
             ]
         });
@@ -252,7 +252,7 @@ mod tests {
         let result =
             ParsedCosmosTx::build(&hex::decode(raw_tx).unwrap().to_vec(), DataType::Amino).unwrap();
         let overview = result.overview;
-        assert_eq!("Cosmos Hub", overview.common.network);
+        assert_eq!("Unknown Network", overview.common.network);
         assert_eq!(CosmosTxDisplayType::Delegate, overview.display_type);
         match overview.kind[0].clone() {
             MsgOverview::Delegate(overview) => {
@@ -269,18 +269,17 @@ mod tests {
         }
         let expected_detail = json!({
             "common": {
-                "Network": "Cosmos Hub",
+                "Network": "Unknown Network",
                 "Chain ID": "osmo-test-5",
                 "Fee": "4625 uosmo",
                 "Gas Limit": "184991",
-                "Max Fee": "855583375 uosmo",
             },
             "kind": [
                 {
                     "Method": "Delegate",
                     "Value": "2000000 uosmo",
-                    "From": "osmo17u02f80vkafne9la4wypdx3kxxxxwm6fzmcgyc",
-                    "To": "osmovaloper1hh0g5xf23e5zekg45cmerc97hs4n2004dy2t26"
+                    "Delegator": "osmo17u02f80vkafne9la4wypdx3kxxxxwm6fzmcgyc",
+                    "Validator": "osmovaloper1hh0g5xf23e5zekg45cmerc97hs4n2004dy2t26"
                 }
             ]
         });
@@ -315,7 +314,6 @@ mod tests {
                 "Network": "Evmos Testnet",
                 "Chain ID": "evmos_9000-4",
                 "Fee": "7500000000000000 atevmos",
-                "Max Fee": "2250000000000000000000 atevmos",
                 "Gas Limit": "300000"
             },
             "kind": [
@@ -337,7 +335,7 @@ mod tests {
         let result =
             ParsedCosmosTx::build(&hex::decode(raw_tx).unwrap().to_vec(), DataType::Amino).unwrap();
         let overview = result.overview;
-        assert_eq!("Cosmos Hub", overview.common.network);
+        assert_eq!("Unknown Network", overview.common.network);
         assert_eq!(CosmosTxDisplayType::Undelegate, overview.display_type);
         match overview.kind[0].clone() {
             MsgOverview::Undelegate(overview) => {
@@ -354,10 +352,9 @@ mod tests {
         }
         let expected_detail = json!({
             "common": {
-                "Network": "Cosmos Hub",
+                "Network": "Unknown Network",
                 "Chain ID": "osmo-test-5",
                 "Fee": "9512 uosmo",
-                "Max Fee": "2261839456 uosmo",
                 "Gas Limit": "237788"
             },
             "kind": [
@@ -400,7 +397,6 @@ mod tests {
                 "Network": "Evmos Testnet",
                 "Chain ID": "evmos_9000-4",
                 "Fee": "37500000000000000 atevmos",
-                "Max Fee": "56250000000000000000000 atevmos",
                 "Gas Limit": "1500000"
             },
             "kind": [
@@ -423,7 +419,7 @@ mod tests {
         let result =
             ParsedCosmosTx::build(&hex::decode(raw_tx).unwrap().to_vec(), DataType::Amino).unwrap();
         let overview = result.overview;
-        assert_eq!("Cosmos Hub", overview.common.network);
+        assert_eq!("Unknown Network", overview.common.network);
         assert_eq!(CosmosTxDisplayType::Redelegate, overview.display_type);
         match overview.kind[0].clone() {
             MsgOverview::Redelegate(overview) => {
@@ -440,11 +436,10 @@ mod tests {
         }
         let expected_detail = json!({
             "common": {
-                "Network": "Cosmos Hub",
+                "Network": "Unknown Network",
                 "Chain ID": "osmo-test-5",
                 "Fee": "8164 uosmo",
                 "Gas Limit": "326559",
-                "Max Fee": "2666027676 uosmo"
             },
             "kind": [
                 {
@@ -486,7 +481,6 @@ mod tests {
                 "Network": "Evmos Testnet",
                 "Chain ID": "evmos_9000-4",
                 "Fee": "8750000000000000 atevmos",
-                "Max Fee": "3062500000000000000000 atevmos",
                 "Gas Limit": "350000"
             },
             "kind": [
@@ -526,8 +520,8 @@ mod tests {
                 "Network": "Evmos Testnet",
                 "Chain ID": "evmos_9000-4",
                 "Fee": "100 ucosm",
-                "Max Fee": "25000 ucosm",
-                "Gas Limit": "250"
+                "Gas Limit": "250",
+                "Memo": "Some memo"
             },
             "kind": [
                 {
@@ -568,8 +562,8 @@ mod tests {
                 "Network": "Evmos Testnet",
                 "Chain ID": "evmos_9000-4",
                 "Fee": "100 ucosm",
-                "Max Fee": "25000 ucosm",
-                "Gas Limit": "250"
+                "Gas Limit": "250",
+                "Memo": "Some memo"
             },
             "kind": [
                 {
@@ -611,7 +605,6 @@ mod tests {
                 "Network": "Osmosis",
                 "Chain ID": "osmosis-1",
                 "Fee": "5333 uosmo",
-                "Max Fee": "1137555565 uosmo",
                 "Gas Limit": "213305"
             },
             "kind": [
@@ -662,7 +655,6 @@ mod tests {
                 "Network": "Osmosis",
                 "Chain ID": "osmosis-1",
                 "Fee": "2000 uosmo",
-                "Max Fee": "24690000 uosmo",
                 "Gas Limit": "12345"
             },
             "kind": [
@@ -705,7 +697,6 @@ mod tests {
                 "Network": "Osmosis",
                 "Chain ID": "osmosis-1",
                 "Fee": "1946 uosmo",
-                "Max Fee": "151426044 uosmo",
                 "Gas Limit": "77814"
             },
             "kind": [
@@ -745,7 +736,6 @@ mod tests {
                 "Network": "Osmosis",
                 "Chain ID": "osmosis-1",
                 "Fee": "2000 uosmo",
-                "Max Fee": "24690000 uosmo",
                 "Gas Limit": "12345"
             },
             "kind": [
@@ -769,17 +759,27 @@ mod tests {
         let overview = result.overview;
         assert_eq!("Evmos Testnet", overview.common.network);
         assert_eq!(CosmosTxDisplayType::Unknown, overview.display_type);
-        assert_eq!(0, overview.kind.len());
-        let expected_detail = json!({
-            "Network": "Evmos Testnet",
-            "Chain ID": "evmos_9000-4",
-            "Fee": "100 ucosm",
-            "Gas Limit": "250",
-            "Max Fee": "25000 ucosm",
-            "Message": "Unknown Data"
-        });
+        assert_eq!(1, overview.kind.len());
+        match &overview.kind[0] {
+            MsgOverview::Unknown(unknown) => {
+                assert_eq!("/ibc.core.channel.v1.MsgAcknowledgement", unknown.type_url);
+                assert_eq!("1", unknown.message_index);
+                assert!(unknown.data_digest.starts_with("0x"));
+                assert_eq!(66, unknown.data_digest.len());
+            }
+            _ => panic!("unknown message was not preserved"),
+        }
         let parsed_detail: Value = from_str(result.detail.as_str()).unwrap();
-        assert_eq!(expected_detail, parsed_detail);
+        assert_eq!("Evmos Testnet", parsed_detail["common"]["Network"]);
+        assert_eq!("evmos_9000-4", parsed_detail["common"]["Chain ID"]);
+        assert_eq!("Some memo", parsed_detail["common"]["Memo"]);
+        assert_eq!("100 ucosm", parsed_detail["common"]["Fee"]);
+        assert_eq!("250", parsed_detail["common"]["Gas Limit"]);
+        assert_eq!("Blind Sign", parsed_detail["kind"][0]["Method"]);
+        assert_eq!(
+            "/ibc.core.channel.v1.MsgAcknowledgement",
+            parsed_detail["kind"][0]["Type URL"]
+        );
     }
 
     #[test]
@@ -788,15 +788,86 @@ mod tests {
         let result =
             ParsedCosmosTx::build(&hex::decode(raw_tx).unwrap().to_vec(), DataType::Amino).unwrap();
         let overview = result.overview;
-        assert_eq!("Cosmos Hub", overview.common.network);
+        assert_eq!("Unknown Network", overview.common.network);
         assert_eq!(CosmosTxDisplayType::Unknown, overview.display_type);
         assert_eq!(0, overview.kind.len());
         let expected_detail = json!({
-            "Network": "Cosmos Hub",
+            "Network": "Unknown Network",
             "Chain ID": "pulsar-2",
+            "Memo": "Create Keplr Secret encryption key. Only approve requests by Keplr.",
             "Message": "Unknown Data"
         });
         let parsed_detail: Value = from_str(result.detail.as_str()).unwrap();
         assert_eq!(expected_detail, parsed_detail);
+    }
+
+    #[test]
+    fn test_parse_cosmos_supported_plus_unknown_amino() {
+        let tx = json!({
+            "account_number": "1",
+            "chain_id": "cosmoshub-4",
+            "fee": {
+                "amount": [{"amount": "2583", "denom": "uatom"}],
+                "gas": "103301"
+            },
+            "memo": "",
+            "msgs": [
+                {
+                    "type": "cosmos-sdk/MsgSend",
+                    "value": {
+                        "amount": [{"amount": "12000", "denom": "uatom"}],
+                        "from_address": "cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4",
+                        "to_address": "cosmos1kwml7yt4em4en7guy6het2q3308u73dff983s3"
+                    }
+                },
+                {
+                    "type": "/cosmos.authz.v1beta1.MsgExec",
+                    "value": {"grantee": "cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4"}
+                }
+            ],
+            "sequence": "2"
+        });
+
+        let result = ParsedCosmosTx::build_from_value(&tx).unwrap();
+        assert_eq!(CosmosTxDisplayType::Multiple, result.overview.display_type);
+        assert_eq!(2, result.overview.kind.len());
+        assert!(matches!(result.overview.kind[0], MsgOverview::Send(_)));
+        assert!(matches!(result.overview.kind[1], MsgOverview::Unknown(_)));
+
+        let detail: Value = from_str(result.detail.as_str()).unwrap();
+        assert_eq!("Send", detail["kind"][0]["Method"]);
+        assert_eq!("Blind Sign", detail["kind"][1]["Method"]);
+        assert_eq!("2", detail["kind"][1]["Message Index"]);
+        assert_eq!(
+            "/cosmos.authz.v1beta1.MsgExec",
+            detail["kind"][1]["Type URL"]
+        );
+    }
+
+    #[test]
+    fn test_parse_cosmos_preserves_long_memo() {
+        let memo = "SWAP:ETH.ETH:cosmos1destination:1/1/0:AFFILIATE-".repeat(35);
+        let tx = json!({
+            "account_number": "1",
+            "chain_id": "cosmoshub-4",
+            "fee": {
+                "amount": [{"amount": "2583", "denom": "uatom"}],
+                "gas": "103301"
+            },
+            "memo": memo.clone(),
+            "msgs": [{
+                "type": "cosmos-sdk/MsgSend",
+                "value": {
+                    "amount": [{"amount": "1000000", "denom": "uatom"}],
+                    "from_address": "cosmos19rl4cm2hmr8afy4kldpxz3fka4jguq0auqdal4",
+                    "to_address": "cosmos1kwml7yt4em4en7guy6het2q3308u73dff983s3"
+                }
+            }],
+            "sequence": "2"
+        });
+
+        let result = ParsedCosmosTx::build_from_value(&tx).unwrap();
+        let detail: Value = from_str(result.detail.as_str()).unwrap();
+        assert_eq!(memo, detail["common"]["Memo"]);
     }
 }

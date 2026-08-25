@@ -5,12 +5,11 @@ use crate::transaction::structs::FeeDetail;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::ops::Div;
 use serde::Serialize;
 
-pub const ATOM_TO_UATOM_UNIT: f64 = 1000000f64;
-pub const DYM_TO_ADYM_UNIT: f64 = 1e18f64;
-pub const INJ_TO_INJ_UNIT: f64 = 1e18f64;
+pub const ATOM_DECIMALS: usize = 6;
+pub const DYM_DECIMALS: usize = 18;
+pub const INJ_DECIMALS: usize = 18;
 
 #[derive(Debug, Serialize)]
 pub struct Fee {
@@ -60,30 +59,58 @@ pub fn format_amount(amounts: Vec<Coin>) -> String {
 
 pub fn format_coin(coin: Coin) -> Option<String> {
     if coin.denom.to_lowercase().eq("uatom") {
-        if let Ok(value) = coin.amount.as_str().parse::<f64>() {
-            return Some(format!("{} {}", value.div(ATOM_TO_UATOM_UNIT), "ATOM"));
-        }
+        return format_decimal_amount(&coin.amount, ATOM_DECIMALS)
+            .map(|value| format!("{value} ATOM"));
     } else if coin.denom.to_lowercase().eq("adym") {
-        if let Ok(value) = coin.amount.as_str().parse::<f64>() {
-            return Some(format!("{} {}", value.div(DYM_TO_ADYM_UNIT), "DYM"));
-        }
+        return format_decimal_amount(&coin.amount, DYM_DECIMALS)
+            .map(|value| format!("{value} DYM"));
     } else if coin.denom.eq("inj") {
-        if let Ok(value) = coin.amount.as_str().parse::<f64>() {
-            return Some(format!("{} {}", value.div(INJ_TO_INJ_UNIT), "INJ"));
-        }
+        return format_decimal_amount(&coin.amount, INJ_DECIMALS)
+            .map(|value| format!("{value} INJ"));
     } else {
         return Some(format!("{} {}", coin.amount, coin.denom));
     }
-    None
 }
 
-pub fn parse_gas_limit(gas: &serde_json::Value) -> Result<f64> {
-    if let Some(gas_limit) = gas.as_str() {
-        let result = gas_limit.parse::<f64>()?;
-        return Ok(result);
+fn format_decimal_amount(amount: &str, decimals: usize) -> Option<String> {
+    if amount.is_empty() || !amount.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
     }
-    if let Some(gas_limit) = gas.as_f64() {
-        return Ok(gas_limit);
+    let normalized = amount.trim_start_matches('0');
+    let digits = if normalized.is_empty() {
+        "0"
+    } else {
+        normalized
+    };
+    if decimals == 0 {
+        return Some(digits.to_string());
+    }
+
+    let (integer, fraction) = if digits.len() > decimals {
+        let split = digits.len() - decimals;
+        (digits[..split].to_string(), digits[split..].to_string())
+    } else {
+        (
+            "0".to_string(),
+            format!("{}{}", "0".repeat(decimals - digits.len()), digits),
+        )
+    };
+    let fraction = fraction.trim_end_matches('0');
+    if fraction.is_empty() {
+        Some(integer)
+    } else {
+        Some(format!("{integer}.{fraction}"))
+    }
+}
+
+pub fn parse_gas_limit(gas: &serde_json::Value) -> Result<String> {
+    if let Some(gas_limit) = gas.as_str() {
+        if gas_limit.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Ok(gas_limit.to_string());
+        }
+    }
+    if let Some(gas_limit) = gas.as_u64() {
+        return Ok(gas_limit.to_string());
     }
     Err(CosmosError::InvalidData(format!(
         "failed to parse gas {gas:?}"
@@ -92,45 +119,57 @@ pub fn parse_gas_limit(gas: &serde_json::Value) -> Result<f64> {
 
 pub fn format_fee_from_value(data: serde_json::Value) -> Result<FeeDetail> {
     let gas_limit = parse_gas_limit(&data["gas"])?;
-    let mut max_fee: Vec<String> = Vec::new();
     let mut fee: Vec<String> = Vec::new();
     if let Some(amounts) = data["amount"].as_array() {
         for each in amounts {
             if let (Some(amount), Some(denom)) = (each["amount"].as_str(), each["denom"].as_str()) {
-                if let Ok(value) = amount.parse::<f64>() {
-                    if denom.to_lowercase().eq("uatom") {
-                        fee.push(format!("{} {}", value.div(ATOM_TO_UATOM_UNIT), "ATOM"));
-                        max_fee.push(format!(
-                            "{} {}",
-                            value.div(ATOM_TO_UATOM_UNIT) * gas_limit,
-                            "ATOM"
-                        ))
-                    } else if denom.to_lowercase().eq("adym") {
-                        fee.push(format!("{} {}", value.div(DYM_TO_ADYM_UNIT), "DYM"));
-                        max_fee.push(format!(
-                            "{} {}",
-                            value.div(DYM_TO_ADYM_UNIT) * gas_limit,
-                            "DYM"
-                        ))
-                    } else if denom.eq("inj") {
-                        fee.push(format!("{} {}", value.div(INJ_TO_INJ_UNIT), "INJ"));
-                        max_fee.push(format!(
-                            "{} {}",
-                            value.div(INJ_TO_INJ_UNIT) * gas_limit,
-                            "INJ"
-                        ))
-                    } else {
-                        max_fee.push(format!("{} {}", value * gas_limit, denom));
-                        fee.push(format!("{value} {denom}"));
-                    };
+                if let Some(value) = format_coin(Coin {
+                    amount: amount.to_string(),
+                    denom: denom.to_string(),
+                }) {
+                    fee.push(value);
                 }
             }
         }
+        let formatted_fee = fee.join(",");
         return Ok(FeeDetail {
-            max_fee: max_fee.join(","),
-            fee: fee.join(","),
-            gas_limit: gas_limit.to_string(),
+            fee: formatted_fee,
+            gas_limit,
         });
     }
     Err(CosmosError::InvalidData("can not parse fee".to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn fee_amount_is_total_fee_not_gas_price() {
+        let fee = format_fee_from_value(json!({
+            "amount": [{"amount": "2583", "denom": "uatom"}],
+            "gas": "103301"
+        }))
+        .unwrap();
+        assert_eq!("0.002583 ATOM", fee.fee);
+        assert_eq!("103301", fee.gas_limit);
+    }
+
+    #[test]
+    fn fee_formatting_preserves_large_integer_precision() {
+        let fee = format_fee_from_value(json!({
+            "amount": [{
+                "amount": "115792089237316195423570985008687907853269984665640564039457",
+                "denom": "uatom"
+            }],
+            "gas": "18446744073709551615"
+        }))
+        .unwrap();
+        assert_eq!(
+            "115792089237316195423570985008687907853269984665640564.039457 ATOM",
+            fee.fee
+        );
+        assert_eq!("18446744073709551615", fee.gas_limit);
+    }
 }

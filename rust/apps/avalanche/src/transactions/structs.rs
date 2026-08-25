@@ -52,11 +52,25 @@ where
 
         let len = bytes.get_u32() as usize;
 
+        // Every encoded item consumes at least one byte. Reject impossible
+        // counts before reserving attacker-controlled capacity.
+        if len > bytes.len() {
+            return Err(AvaxError::InvalidHex(
+                "LengthPrefixedVec count exceeds remaining data".to_string(),
+            ));
+        }
+
         let mut items = Vec::with_capacity(len);
 
         for _ in 0..len {
             let item = T::try_from(bytes.clone())?;
-            bytes.advance(item.parsed_size());
+            let parsed_size = item.parsed_size();
+            if parsed_size == 0 || parsed_size > bytes.len() {
+                return Err(AvaxError::InvalidHex(
+                    "Invalid LengthPrefixedVec item size".to_string(),
+                ));
+            }
+            bytes.advance(parsed_size);
             items.push(item);
         }
 
@@ -73,23 +87,24 @@ pub trait AvaxTxInfo {
     }
 
     fn get_output_amount(&self, address: String, type_id: TypeId) -> u64 {
-        let left_amount = self.get_total_input_amount() - self.get_import_tx_fee();
+        let left_amount = self
+            .get_total_input_amount()
+            .saturating_sub(self.get_import_tx_fee());
         match type_id {
             TypeId::PchainImportTx | TypeId::XchainImportTx => left_amount,
-            _ => {
-                left_amount
-                    - self
-                        .get_outputs_addresses()
-                        .iter()
-                        .find(|info| info.address[0] == address)
-                        .map(|info| info.amount)
-                        .unwrap_or(0)
-            }
+            _ => left_amount.saturating_sub(
+                self.get_outputs_addresses()
+                    .iter()
+                    .find(|info| info.address.iter().any(|item| item == &address))
+                    .map(|info| info.amount)
+                    .unwrap_or(0),
+            ),
         }
     }
 
     fn get_fee_amount(&self) -> u64 {
-        self.get_total_input_amount() - self.get_total_output_amount()
+        self.get_total_input_amount()
+            .saturating_sub(self.get_total_output_amount())
     }
     fn get_outputs_addresses(&self) -> Vec<AvaxFromToInfo>;
     fn get_network(&self) -> Option<String> {

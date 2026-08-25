@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{from_value, Value};
 
 use super::utils::{get_chain_id_by_address, get_network_by_chain_id};
+use crate::utils::sha256_digest;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct OverviewSend {
@@ -43,9 +44,9 @@ pub struct OverviewDelegate {
     pub method: String,
     #[serde(skip_serializing_if = "String::is_empty", rename(serialize = "Value"))]
     pub value: String,
-    #[serde(rename(serialize = "From"))]
+    #[serde(rename(serialize = "Delegator"))]
     pub from: String,
-    #[serde(rename(serialize = "To"))]
+    #[serde(rename(serialize = "Validator"))]
     pub to: String,
 }
 
@@ -257,6 +258,51 @@ impl TryFrom<MsgSignData> for OverviewMessage {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct OverviewUnknown {
+    #[serde(rename(serialize = "Method"))]
+    pub method: String,
+    #[serde(rename(serialize = "Warning"))]
+    pub warning: String,
+    #[serde(rename(serialize = "Message Index"))]
+    pub message_index: String,
+    #[serde(rename(serialize = "Type URL"))]
+    pub type_url: String,
+    #[serde(rename(serialize = "Data Digest"))]
+    pub data_digest: String,
+}
+
+impl OverviewUnknown {
+    pub(crate) fn from_value(message: &Value, index: usize) -> Result<Self> {
+        let wrapper_type = message["type"].as_str().unwrap_or("Unknown");
+        let is_unsupported_direct = wrapper_type == "/NotSupportMessage";
+        let type_url = if is_unsupported_direct {
+            message["value"]["type_url"]
+                .as_str()
+                .unwrap_or(wrapper_type)
+        } else {
+            wrapper_type
+        }
+        .to_string();
+        let data_digest = if is_unsupported_direct {
+            message["value"]["data_digest"]
+                .as_str()
+                .map(ToString::to_string)
+                .unwrap_or_default()
+        } else {
+            let raw_value = serde_json::to_vec(&message["value"])?;
+            format!("0x{}", hex::encode(sha256_digest(&raw_value)))
+        };
+        Ok(Self {
+            method: "Blind Sign".to_string(),
+            warning: "This message cannot be parsed. Verify it before signing.".to_string(),
+            message_index: (index + 1).to_string(),
+            type_url,
+            data_digest,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum MsgOverview {
     Send(OverviewSend),
@@ -267,6 +313,7 @@ pub enum MsgOverview {
     Transfer(OverviewTransfer),
     Vote(OverviewVote),
     Message(OverviewMessage),
+    Unknown(OverviewUnknown),
 }
 
 #[derive(Debug, Clone)]
@@ -287,7 +334,7 @@ impl CosmosTxOverview {
         let msg_arr = msgs
             .as_array()
             .ok_or(CosmosError::ParseTxError("empty msg".to_string()))?;
-        for each in msg_arr {
+        for (index, each) in msg_arr.iter().enumerate() {
             match crate::transaction::utils::detect_msg_type(each["type"].as_str()) {
                 "MsgSend" => {
                     let msg = from_value::<MsgSend>(each["value"].clone())?;
@@ -325,7 +372,9 @@ impl CosmosTxOverview {
                     let msg = from_value::<MsgSignData>(each["value"].clone())?;
                     kind.push(MsgOverview::Message(OverviewMessage::try_from(msg)?));
                 }
-                _ => {}
+                _ => kind.push(MsgOverview::Unknown(OverviewUnknown::from_value(
+                    each, index,
+                )?)),
             };
         }
         Ok(kind)

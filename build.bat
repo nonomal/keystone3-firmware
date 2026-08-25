@@ -51,7 +51,7 @@ IF "%build_language%"=="true" (
     popd  
 )
 
-SET cmake_parm=
+SET "cmake_parm=-DBUILD_PRODUCTION=false -DBTC_ONLY=false -DCYPHERPUNK=false -DENABLE_SCREEN_SHOT=false -DDEBUG_MEMORY=false"
 IF "%build_production%"=="true" SET "cmake_parm=%cmake_parm% -DBUILD_PRODUCTION=true"
 IF "%build_btc_only%"=="true" SET "cmake_parm=%cmake_parm% -DBTC_ONLY=true"
 IF "%build_cypherpunk%"=="true" SET "cmake_parm=%cmake_parm% -DCYPHERPUNK=true"
@@ -62,7 +62,7 @@ IF "%build_simulator%"=="true" (
     IF NOT EXIST %BUILD_SIMULATOR_FOLDER% mkdir %BUILD_SIMULATOR_FOLDER%
     pushd %BUILD_SIMULATOR_FOLDER%
     cmake -G "Unix Makefiles" -DBUILD_TYPE=Simulator %cmake_parm% .. 
-    make -j16 -O
+    make -j16
     popd
 ) ELSE (
     pushd %BUILD_FOLDER%
@@ -70,7 +70,7 @@ IF "%build_simulator%"=="true" (
     IF "%build_log%"=="true" (
         make -j16 > makefile.log 2>&1
     ) ELSE (
-        make -j16 -O
+        make -j16
     )
     python padding_bin_file.py mh1903.bin
     popd

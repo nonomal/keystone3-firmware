@@ -69,22 +69,25 @@ use ur_registry::sui::sui_sign_hash_request::SuiSignHashRequest;
 use ur_registry::sui::sui_sign_request::SuiSignRequest;
 #[cfg(feature = "ton")]
 use ur_registry::ton::ton_sign_request::TonSignRequest;
+#[cfg(feature = "tron")]
+use ur_registry::tron::tron_sign_request::TronSignRequest;
 #[cfg(feature = "zcash")]
 use ur_registry::zcash::zcash_pczt::ZcashPczt;
+#[cfg(feature = "zcash_cypherpunk")]
+use ur_registry::zcash::zcash_sign_batch::ZcashSignBatch;
 
 use super::errors::{ErrorCodes, RustCError};
 use super::free::Free;
 use super::types::{PtrDecoder, PtrEncoder, PtrString, PtrUR};
 use super::ur_ext::InferViewType;
-use super::utils::{convert_c_char, recover_c_char};
+use super::utils::{check_recover_c_char_lossy, convert_c_char, recover_c_char};
 use crate::{
     extract_ptr_with_type, free_ptr_with_type, free_str_ptr, impl_c_ptr, impl_new_error,
     impl_response,
 };
 
-#[no_mangle]
-pub static FRAGMENT_MAX_LENGTH_DEFAULT: usize = 200;
-pub static FRAGMENT_UNLIMITED_LENGTH: usize = 11000;
+pub const FRAGMENT_MAX_LENGTH_DEFAULT: usize = 200;
+pub const FRAGMENT_UNLIMITED_LENGTH: usize = 11000;
 
 #[repr(C)]
 pub struct UREncodeResult {
@@ -131,12 +134,22 @@ impl UREncodeResult {
         }
     }
 
-    pub fn encode(data: Vec<u8>, tag: String, max_fragment_length: usize) -> Self {
+    fn encode_with_multipart_policy(
+        data: Vec<u8>,
+        tag: String,
+        max_fragment_length: usize,
+        allow_multipart: bool,
+    ) -> Self {
         let result =
             ur_parse_lib::keystone_ur_encoder::probe_encode(&data, max_fragment_length, tag);
         match result {
             Ok(result) => {
                 if result.is_multi_part {
+                    if !allow_multipart {
+                        return Self::from(RustCError::UnsupportedTransaction(
+                            "encoded UR is too large for a single USB response".to_string(),
+                        ));
+                    }
                     match result.encoder {
                         Some(v) => Self::multi(result.data.to_uppercase(), v),
                         None => Self::from(RustCError::UnexpectedError(
@@ -149,6 +162,15 @@ impl UREncodeResult {
             }
             Err(e) => Self::from(e),
         }
+    }
+
+    pub fn encode(data: Vec<u8>, tag: String, max_fragment_length: usize) -> Self {
+        Self::encode_with_multipart_policy(data, tag, max_fragment_length, true)
+    }
+
+    pub fn encode_full_response(data: Vec<u8>, tag: String) -> Self {
+        let max_fragment_length = data.len().max(1);
+        Self::encode_with_multipart_policy(data, tag, max_fragment_length, false)
     }
 }
 
@@ -225,6 +247,10 @@ pub enum ViewType {
     EthTypedData,
     #[cfg(feature = "tron")]
     TronTx,
+    #[cfg(feature = "tron")]
+    TronPersonalMessage,
+    #[cfg(feature = "tron")]
+    TronSwapTx,
     #[cfg(feature = "solana")]
     SolanaTx,
     #[cfg(feature = "solana")]
@@ -272,6 +298,8 @@ pub enum ViewType {
     TonSignProof,
     #[cfg(feature = "zcash")]
     ZcashTx,
+    #[cfg(feature = "zcash_cypherpunk")]
+    ZcashBatchTx,
     #[cfg(feature = "aptos")]
     AptosTx,
     #[cfg(feature = "monero")]
@@ -283,6 +311,8 @@ pub enum ViewType {
     WebAuthResult,
     #[cfg(not(feature = "btc-only"))]
     KeyDerivationRequest,
+    #[cfg(feature = "multi-coins")]
+    DeriveContextHashRequest,
     #[cfg(feature = "multi-coins")]
     BatchCall,
     #[cfg(feature = "btc-only")]
@@ -315,6 +345,8 @@ pub enum QRCodeType {
     EthBatchSignRequest,
     #[cfg(feature = "solana")]
     SolSignRequest,
+    #[cfg(feature = "tron")]
+    TronSignRequest,
     #[cfg(feature = "near")]
     NearSignRequest,
     #[cfg(feature = "cardano")]
@@ -356,6 +388,8 @@ pub enum QRCodeType {
     AvaxSignRequest,
     #[cfg(feature = "zcash")]
     ZcashPczt,
+    #[cfg(feature = "zcash_cypherpunk")]
+    ZcashSignBatch,
     #[cfg(feature = "monero")]
     XmrOutputSignRequest,
     #[cfg(feature = "monero")]
@@ -384,6 +418,8 @@ impl QRCodeType {
             InnerURType::EthBatchSignRequest(_) => Ok(QRCodeType::EthBatchSignRequest),
             #[cfg(feature = "solana")]
             InnerURType::SolSignRequest(_) => Ok(QRCodeType::SolSignRequest),
+            #[cfg(feature = "tron")]
+            InnerURType::TronSignRequest(_) => Ok(QRCodeType::TronSignRequest),
             #[cfg(feature = "near")]
             InnerURType::NearSignRequest(_) => Ok(QRCodeType::NearSignRequest),
             #[cfg(feature = "cosmos")]
@@ -422,6 +458,8 @@ impl QRCodeType {
             InnerURType::TonSignRequest(_) => Ok(QRCodeType::TonSignRequest),
             #[cfg(feature = "zcash")]
             InnerURType::ZcashPczt(_) => Ok(QRCodeType::ZcashPczt),
+            #[cfg(feature = "zcash_cypherpunk")]
+            InnerURType::ZcashSignBatch(_) => Ok(QRCodeType::ZcashSignBatch),
             #[cfg(feature = "monero")]
             InnerURType::XmrTxUnsigned(_) => Ok(QRCodeType::XmrTxUnsignedRequest),
             #[cfg(feature = "monero")]
@@ -473,12 +511,7 @@ impl URParseResult {
         }
     }
 
-    pub fn multi(
-        progress: u32,
-        t: ViewType,
-        ur_type: QRCodeType,
-        decoder: KeystoneURDecoder,
-    ) -> Self {
+    fn multi(progress: u32, t: ViewType, ur_type: QRCodeType, decoder: KeystoneURDecoder) -> Self {
         let _self = Self::new();
         let decoder = Box::into_raw(Box::new(decoder)) as PtrUR;
         Self {
@@ -524,6 +557,10 @@ unsafe fn free_ur(ur_type: &QRCodeType, data: PtrUR) {
         #[cfg(feature = "solana")]
         QRCodeType::SolSignRequest => {
             free_ptr_with_type!(data, SolSignRequest);
+        }
+        #[cfg(feature = "tron")]
+        QRCodeType::TronSignRequest => {
+            free_ptr_with_type!(data, TronSignRequest);
         }
         #[cfg(feature = "near")]
         QRCodeType::NearSignRequest => {
@@ -590,6 +627,10 @@ unsafe fn free_ur(ur_type: &QRCodeType, data: PtrUR) {
         #[cfg(feature = "cardano")]
         QRCodeType::CardanoCatalystVotingRegistrationRequest => {
             free_ptr_with_type!(data, CardanoCatalystVotingRegistrationRequest);
+        }
+        #[cfg(feature = "zcash_cypherpunk")]
+        QRCodeType::ZcashSignBatch => {
+            free_ptr_with_type!(data, ZcashSignBatch);
         }
         #[cfg(feature = "monero")]
         QRCodeType::XmrOutputSignRequest => {
@@ -672,6 +713,74 @@ impl Free for URParseMultiResult {
 
 impl_response!(URParseMultiResult);
 
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use super::*;
+
+    #[test]
+    fn test_encode_full_response_returns_complete_ur_when_capped_encoder_would_fragment() {
+        let capped_result = UREncodeResult::encode(
+            vec![0; FRAGMENT_UNLIMITED_LENGTH + 1],
+            "bytes".to_string(),
+            FRAGMENT_UNLIMITED_LENGTH,
+        );
+        assert_eq!(capped_result.error_code, ErrorCodes::Success as u32);
+        assert!(capped_result.is_multi_part);
+        let capped_data = unsafe { recover_c_char(capped_result.data) };
+        assert!(capped_data.contains("/1-"));
+        unsafe {
+            capped_result.free();
+        }
+
+        let full_result = UREncodeResult::encode_full_response(
+            vec![0; FRAGMENT_UNLIMITED_LENGTH + 1],
+            "bytes".to_string(),
+        );
+        assert_eq!(full_result.error_code, ErrorCodes::Success as u32);
+        assert!(!full_result.is_multi_part);
+        assert!(full_result.encoder.is_null());
+        let full_data = unsafe { recover_c_char(full_result.data) };
+        assert!(full_data.starts_with("UR:BYTES/"));
+        assert!(!full_data.contains("/1-"));
+        unsafe {
+            full_result.free();
+        }
+
+        let zcash_sign_result = UREncodeResult::encode_full_response(
+            vec![0; FRAGMENT_UNLIMITED_LENGTH + 1],
+            "zcash-sign-result".to_string(),
+        );
+        assert_eq!(zcash_sign_result.error_code, ErrorCodes::Success as u32);
+        assert!(!zcash_sign_result.is_multi_part);
+        assert!(zcash_sign_result.encoder.is_null());
+        let zcash_data = unsafe { recover_c_char(zcash_sign_result.data) };
+        assert!(zcash_data.starts_with("UR:ZCASH-SIGN-RESULT/"));
+        assert!(!zcash_data.contains("/1-"));
+        unsafe {
+            zcash_sign_result.free();
+        }
+
+        let zcash_batch_sig_result = UREncodeResult::encode_full_response(
+            vec![0; FRAGMENT_UNLIMITED_LENGTH + 1],
+            "zcash-batch-sig-result".to_string(),
+        );
+        assert_eq!(
+            zcash_batch_sig_result.error_code,
+            ErrorCodes::Success as u32
+        );
+        assert!(!zcash_batch_sig_result.is_multi_part);
+        assert!(zcash_batch_sig_result.encoder.is_null());
+        let zcash_data = unsafe { recover_c_char(zcash_batch_sig_result.data) };
+        assert!(zcash_data.starts_with("UR:ZCASH-BATCH-SIG-RESULT/"));
+        assert!(!zcash_data.contains("/1-"));
+        unsafe {
+            zcash_batch_sig_result.free();
+        }
+    }
+}
+
 fn get_ur_type(ur: &String) -> Result<QRCodeType, URError> {
     let t = ur_parse_lib::keystone_ur_decoder::get_type(ur)?;
     QRCodeType::from(&t)
@@ -739,6 +848,8 @@ pub fn decode_ur(ur: String) -> URParseResult {
         QRCodeType::EthBatchSignRequest => _decode_ur::<EthBatchSignRequest>(ur, ur_type),
         #[cfg(feature = "solana")]
         QRCodeType::SolSignRequest => _decode_ur::<SolSignRequest>(ur, ur_type),
+        #[cfg(feature = "tron")]
+        QRCodeType::TronSignRequest => _decode_ur::<TronSignRequest>(ur, ur_type),
         #[cfg(feature = "near")]
         QRCodeType::NearSignRequest => _decode_ur::<NearSignRequest>(ur, ur_type),
         #[cfg(feature = "cardano")]
@@ -777,6 +888,8 @@ pub fn decode_ur(ur: String) -> URParseResult {
         QRCodeType::TonSignRequest => _decode_ur::<TonSignRequest>(ur, ur_type),
         #[cfg(feature = "zcash")]
         QRCodeType::ZcashPczt => _decode_ur::<ZcashPczt>(ur, ur_type),
+        #[cfg(feature = "zcash_cypherpunk")]
+        QRCodeType::ZcashSignBatch => _decode_ur::<ZcashSignBatch>(ur, ur_type),
         #[cfg(feature = "monero")]
         QRCodeType::XmrOutputSignRequest => _decode_ur::<XmrOutput>(ur, ur_type),
         #[cfg(feature = "monero")]
@@ -843,6 +956,8 @@ fn receive_ur(ur: String, decoder: &mut KeystoneURDecoder) -> URParseMultiResult
         QRCodeType::EthBatchSignRequest => _receive_ur::<EthBatchSignRequest>(ur, ur_type, decoder),
         #[cfg(feature = "solana")]
         QRCodeType::SolSignRequest => _receive_ur::<SolSignRequest>(ur, ur_type, decoder),
+        #[cfg(feature = "tron")]
+        QRCodeType::TronSignRequest => _receive_ur::<TronSignRequest>(ur, ur_type, decoder),
         #[cfg(feature = "near")]
         QRCodeType::NearSignRequest => _receive_ur::<NearSignRequest>(ur, ur_type, decoder),
         #[cfg(feature = "cardano")]
@@ -887,6 +1002,8 @@ fn receive_ur(ur: String, decoder: &mut KeystoneURDecoder) -> URParseMultiResult
         QRCodeType::TonSignRequest => _receive_ur::<TonSignRequest>(ur, ur_type, decoder),
         #[cfg(feature = "zcash")]
         QRCodeType::ZcashPczt => _receive_ur::<ZcashPczt>(ur, ur_type, decoder),
+        #[cfg(feature = "zcash_cypherpunk")]
+        QRCodeType::ZcashSignBatch => _receive_ur::<ZcashSignBatch>(ur, ur_type, decoder),
         #[cfg(feature = "monero")]
         QRCodeType::XmrOutputSignRequest => _receive_ur::<XmrOutput>(ur, ur_type, decoder),
         #[cfg(feature = "monero")]
@@ -921,11 +1038,33 @@ pub extern "C" fn get_next_cyclic_part(ptr: PtrEncoder) -> *mut UREncodeMultiRes
 
 #[no_mangle]
 pub unsafe extern "C" fn parse_ur(ur: PtrString) -> *mut URParseResult {
-    decode_ur(recover_c_char(ur)).c_ptr()
+    if ur.is_null() {
+        return URParseResult::from(RustCError::InvalidData("UR payload is null".to_string()))
+            .c_ptr();
+    }
+    let (is_valid_utf8, ur) = check_recover_c_char_lossy(ur);
+    if !is_valid_utf8 {
+        return URParseResult::from(RustCError::InvalidData(
+            "UR payload is not valid UTF-8".to_string(),
+        ))
+        .c_ptr();
+    }
+    decode_ur(ur).c_ptr()
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn receive(ur: PtrString, decoder: PtrDecoder) -> *mut URParseMultiResult {
+    if ur.is_null() {
+        return URParseMultiResult::from(RustCError::InvalidData("UR payload is null".to_string()))
+            .c_ptr();
+    }
+    let (is_valid_utf8, ur) = check_recover_c_char_lossy(ur);
+    if !is_valid_utf8 {
+        return URParseMultiResult::from(RustCError::InvalidData(
+            "UR payload is not valid UTF-8".to_string(),
+        ))
+        .c_ptr();
+    }
     let decoder = extract_ptr_with_type!(decoder, KeystoneURDecoder);
-    receive_ur(recover_c_char(ur), decoder).c_ptr()
+    receive_ur(ur, decoder).c_ptr()
 }

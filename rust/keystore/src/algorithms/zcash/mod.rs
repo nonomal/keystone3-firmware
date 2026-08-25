@@ -2,16 +2,13 @@ use core::str::FromStr;
 
 use alloc::string::{String, ToString};
 use bitcoin::bip32::{ChildNumber, DerivationPath};
-use rand_core::{CryptoRng, RngCore};
 use zcash_vendor::{
-    orchard::{
-        self,
-        keys::{SpendAuthorizingKey, SpendingKey},
-    },
     zcash_keys::keys::UnifiedSpendingKey,
     zcash_protocol::consensus,
     zip32::{self, fingerprint::SeedFingerprint},
 };
+
+use crate::algorithms::utils::is_all_zero_or_ff;
 
 use crate::errors::{KeystoreError, Result};
 
@@ -20,6 +17,7 @@ pub fn derive_ufvk<P: consensus::Parameters>(
     seed: &[u8],
     account_path: &str,
 ) -> Result<String> {
+    ensure_non_trivial_seed(seed)?;
     let account_path = DerivationPath::from_str(account_path.to_lowercase().as_str())
         .map_err(|e| KeystoreError::DerivationError(e.to_string()))?;
     if account_path.len() != 3 {
@@ -50,46 +48,25 @@ pub fn derive_ufvk<P: consensus::Parameters>(
     }
 }
 
+fn ensure_non_trivial_seed(seed: &[u8]) -> Result<()> {
+    if is_all_zero_or_ff(seed) {
+        return Err(KeystoreError::SeedError("invalid seed".to_string()));
+    }
+    Ok(())
+}
+
 pub fn calculate_seed_fingerprint(seed: &[u8]) -> Result<[u8; 32]> {
+    ensure_non_trivial_seed(seed)?;
     let sfp = SeedFingerprint::from_seed(seed).ok_or(KeystoreError::SeedError(
         "Invalid seed, cannot calculate ZIP-32 Seed Fingerprint".into(),
     ))?;
     Ok(sfp.to_bytes())
 }
 
-pub fn sign_message_orchard<R: RngCore + CryptoRng>(
-    action: &mut orchard::pczt::Action,
-    seed: &[u8],
-    sighash: [u8; 32],
-    path: &[zip32::ChildIndex],
-    rng: R,
-) -> Result<()> {
-    let coin_type = 133;
-
-    if path.len() == 3
-        && path[0] == zip32::ChildIndex::hardened(32)
-        && path[1] == zip32::ChildIndex::hardened(coin_type)
-    {
-        let account_id = zip32::AccountId::try_from(path[2].index() - (1 << 31)).expect("valid");
-
-        let osk = SpendingKey::from_zip32_seed(seed, coin_type, account_id).unwrap();
-
-        let osak = SpendAuthorizingKey::from(&osk);
-
-        action
-            .sign(sighash, &osak, rng)
-            .map_err(|e| KeystoreError::ZcashOrchardSign(format!("{e:?}")))
-    } else {
-        // Keystone only generates UFVKs at the above path; ignore all other signature
-        // requests.
-        Err(KeystoreError::ZcashOrchardSign(format!(
-            "invalid orchard account path: {path:?}"
-        )))
-    }
-}
-
+#[cfg(feature = "cypherpunk")]
 #[cfg(test)]
-mod tests {
+mod orchard_tests {
+    use super::*;
     use zcash_vendor::{
         pasta_curves::Fq,
         zcash_keys::keys::{UnifiedAddressRequest, UnifiedSpendingKey},
@@ -173,5 +150,24 @@ mod tests {
         let sig = osak.randomize(&randm).sign(rng, &msg);
         let bytes = <[u8; 64]>::from(&sig);
         assert_eq!(hex::encode(bytes), "065ef82c33af0ed487e8932112e3359e93c5955d3eac6c3a1f9cb6dd24e19d8a2bba454a4274154dd4ad0c6bdb2022a646950ed521f3de18e99015f4821cbb10");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_reject_trivial_seed() {
+        // all-zero seed should be rejected
+        let zero_seed = vec![0u8; 32];
+        let result = calculate_seed_fingerprint(&zero_seed);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(KeystoreError::SeedError(_))));
+
+        // all-0xFF seed should also be rejected
+        let ff_seed = vec![0xffu8; 32];
+        let result = calculate_seed_fingerprint(&ff_seed);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(KeystoreError::SeedError(_))));
     }
 }

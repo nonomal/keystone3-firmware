@@ -26,21 +26,59 @@ pub mod overview;
 pub mod structs;
 
 impl ParsedSolanaTx {
+    fn is_lookup_table_reference(account: &str) -> bool {
+        account
+            .split_once('#')
+            .map(|(table, index)| !table.is_empty() && index.parse::<u8>().is_ok())
+            .unwrap_or(false)
+    }
+
+    fn format_account_for_display(account: &str) -> String {
+        if let Some((table, index)) = account.split_once('#') {
+            if !table.is_empty() && index.parse::<u8>().is_ok() {
+                return format!("Table: {}\nIndex: {}", table, index);
+            }
+        }
+        account.to_string()
+    }
+
     pub fn build(data: &Vec<u8>) -> Result<Self> {
-        let message = Message::read(data.clone().to_vec().as_mut())?;
+        Self::build_with_signer(data, None)
+    }
+
+    pub fn build_for_signer(data: &Vec<u8>, signer: &[u8; 32]) -> Result<Self> {
+        Self::build_with_signer(data, Some(signer))
+    }
+
+    fn build_with_signer(data: &Vec<u8>, signer: Option<&[u8; 32]>) -> Result<Self> {
+        let message = Message::read_exact(data.clone().to_vec().as_mut())?;
+        if let Some(signer) = signer {
+            message.validate_signer(signer)?;
+        }
         let raw_details = message.to_program_details()?;
         let display_type = Self::detect_display_type(&raw_details);
         let parsed_overview = Self::build_overview(&display_type, &raw_details)?;
+        let additional_overviews = Self::build_additional_overviews(&display_type, &raw_details)?;
+        let unknown_programs = Self::collect_additional_unknown_programs(&raw_details);
         let parsed_detail = Self::build_detail(&display_type, &raw_details, &message)?;
         Ok(Self {
             display_type,
             overview: parsed_overview,
+            additional_overviews,
+            unknown_programs,
             detail: parsed_detail,
             network: "Solana Mainnet".to_string(),
         })
     }
     // detect the display type by the details vec contains number of details
     fn detect_display_type(details: &[SolanaDetail]) -> SolanaTxDisplayType {
+        let unknown_count = details
+            .iter()
+            .filter(|d| Self::is_unknown_detail(&d.common))
+            .count();
+        if unknown_count == details.len() {
+            return SolanaTxDisplayType::Unknown;
+        }
         let squads = details
             .iter()
             .filter(|d| Self::is_sqauds_v4_detail(&d.common))
@@ -53,7 +91,11 @@ impl ParsedSolanaTx {
             .iter()
             .filter(|d| Self::is_jupiter_v6_detail(&d.common))
             .collect::<Vec<&SolanaDetail>>();
-        if !jupiter.is_empty() {
+        // Keep the purpose-built Jupiter review for a single swap instruction.
+        // Every sibling instruction is separately retained in
+        // `additional_overviews`/`unknown_programs`, so this does not hide
+        // mixed-transaction actions.
+        if jupiter.len() == 1 {
             return SolanaTxDisplayType::JupiterV6;
         }
 
@@ -64,10 +106,12 @@ impl ParsedSolanaTx {
         if transfer.len() == 1 {
             return SolanaTxDisplayType::Transfer;
         }
-        // if contains token transfer check
+        // Keep both SPL Token transfer variants on the purpose-built transfer UI.
+        // A plain `Transfer` does not include mint metadata, but its source,
+        // destination, and authority roles are still known and must be shown.
         let token_transfer: Vec<&SolanaDetail> = details
             .iter()
-            .filter(|d| Self::is_token_transfer_checked_detail(&d.common))
+            .filter(|d| Self::is_token_transfer_detail(&d.common))
             .collect::<Vec<&SolanaDetail>>();
         if token_transfer.len() == 1 {
             return SolanaTxDisplayType::TokenTransfer;
@@ -80,14 +124,6 @@ impl ParsedSolanaTx {
         if vote.len() == 1 {
             return SolanaTxDisplayType::Vote;
         }
-
-        let instructions: Vec<&SolanaDetail> = details
-            .iter()
-            .filter(|d| Self::is_unknown_detail(&d.common))
-            .collect::<Vec<&SolanaDetail>>();
-        if instructions.len() == details.len() {
-            return SolanaTxDisplayType::Unknown;
-        }
         SolanaTxDisplayType::General
     }
 
@@ -95,8 +131,9 @@ impl ParsedSolanaTx {
         common.program.eq("System") && common.method.eq("Transfer")
     }
 
-    fn is_token_transfer_checked_detail(common: &CommonDetail) -> bool {
-        common.program.eq("Token") && common.method.eq("TransferChecked")
+    fn is_token_transfer_detail(common: &CommonDetail) -> bool {
+        common.program.eq("Token")
+            && (common.method.eq("TransferChecked") || common.method.eq("Transfer"))
     }
 
     fn is_vote_detail(common: &CommonDetail) -> bool {
@@ -105,6 +142,10 @@ impl ParsedSolanaTx {
 
     fn is_unknown_detail(common: &CommonDetail) -> bool {
         common.program.eq("Unknown") && common.method.is_empty()
+    }
+
+    fn is_compute_budget_detail(common: &CommonDetail) -> bool {
+        common.program.eq("ComputeBudget")
     }
 
     fn is_instructions_detail(common: &CommonDetail) -> bool {
@@ -178,7 +219,13 @@ impl ParsedSolanaTx {
                         value: v.value.to_string(),
                         main_action: "SOL Transfer".to_string(),
                         from: v.from.to_string(),
-                        to: v.to.to_string(),
+                        to: Self::format_account_for_display(&v.to),
+                        to_in_lookup_table: Self::is_lookup_table_reference(&v.to),
+                        to_lookup_table_reference: if Self::is_lookup_table_reference(&v.to) {
+                            v.to.clone()
+                        } else {
+                            String::new()
+                        },
                     }))
                 } else {
                     None
@@ -323,33 +370,90 @@ impl ParsedSolanaTx {
             _ => ("SPLToken".to_string(), "Unknown".to_string(), 0),
         }
     }
-    fn build_token_transfer_checked_overview(details: &[SolanaDetail]) -> Result<SolanaOverview> {
-        let overview: Option<SolanaOverview> = details
+
+    fn validate_token_decimals(token_mint_address: &str, decimals: u8) -> Result<()> {
+        let token_info = Self::find_token_info(token_mint_address);
+        let is_known_token = token_info.1 != "Unknown";
+        if is_known_token && decimals != token_info.2 {
+            return Err(SolanaError::InvalidData(
+                "token decimals do not match known mint metadata".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn has_unusual_token_decimals(token_mint_address: &str, decimals: u8) -> bool {
+        const MAX_NORMAL_TOKEN_DECIMALS: u8 = 18;
+        Self::find_token_info(token_mint_address).1 == "Unknown"
+            && decimals > MAX_NORMAL_TOKEN_DECIMALS
+    }
+
+    fn format_token_amount_for_display(
+        token_mint_address: &str,
+        amount: &str,
+        decimals: u8,
+    ) -> Result<String> {
+        if Self::has_unusual_token_decimals(token_mint_address, decimals) {
+            if amount.is_empty() || !amount.bytes().all(|value| value.is_ascii_digit()) {
+                return Err(SolanaError::InvalidData("invalid token amount".to_string()));
+            }
+            return Ok(format!("{} raw units (decimals: {})", amount, decimals));
+        }
+        utils::format_token_amount(amount, decimals)
+    }
+
+    fn build_token_transfer_overview(details: &[SolanaDetail]) -> Result<SolanaOverview> {
+        let detail = details
             .iter()
-            .find(|d| Self::is_token_transfer_checked_detail(&d.common))
-            .and_then(|detail| {
-                if let ProgramDetail::TokenTransferChecked(v) = &detail.kind {
-                    let amount_f64 = v.amount.parse::<f64>().unwrap();
-                    let amount = amount_f64 / 10u64.pow(v.decimals as u32) as f64;
-                    Some(SolanaOverview::SplTokenTransfer(
-                        ProgramOverviewSplTokenTransfer {
-                            source: v.account.to_string(),
-                            destination: v.recipient.to_string(),
-                            authority: v.owner.to_string(),
-                            decimals: v.decimals,
-                            amount: format!("{} {}", amount, Self::find_token_info(&v.mint).0),
-                            token_mint_account: v.mint.clone(),
-                            token_symbol: Self::find_token_info(&v.mint).0,
-                            token_name: Self::find_token_info(&v.mint).1,
-                        },
-                    ))
-                } else {
-                    None
+            .find(|d| Self::is_token_transfer_detail(&d.common))
+            .ok_or_else(|| {
+                SolanaError::ParseTxError(
+                    "parse spl token transfer failed, empty transfer program".to_string(),
+                )
+            })?;
+        let overview = match &detail.kind {
+            ProgramDetail::TokenTransferChecked(value) => {
+                Self::validate_token_decimals(&value.mint, value.decimals)?;
+                let amount = Self::format_token_amount_for_display(
+                    &value.mint,
+                    &value.amount,
+                    value.decimals,
+                )?;
+                let unusual_decimals =
+                    Self::has_unusual_token_decimals(&value.mint, value.decimals);
+                ProgramOverviewSplTokenTransfer {
+                    source: value.account.to_string(),
+                    destination: value.recipient.to_string(),
+                    authority: value.owner.to_string(),
+                    decimals: value.decimals,
+                    amount: format!("{} {}", amount, Self::find_token_info(&value.mint).0),
+                    token_mint_account: value.mint.clone(),
+                    token_symbol: Self::find_token_info(&value.mint).0,
+                    token_name: Self::find_token_info(&value.mint).1,
+                    unusual_decimals,
                 }
-            });
-        overview.ok_or(SolanaError::ParseTxError(
-            "parse spl token transfer failed, empty transfer program".to_string(),
-        ))
+            }
+            ProgramDetail::TokenTransfer(value) => ProgramOverviewSplTokenTransfer {
+                source: value.source_account.clone(),
+                destination: value.recipient.clone(),
+                authority: value.owner.clone(),
+                decimals: 0,
+                amount: format!("{} raw units", value.amount),
+                // A plain SPL Token `Transfer` does not carry mint or decimal
+                // metadata. Leave token metadata empty instead of guessing, while
+                // still reusing the established transfer review UI.
+                token_mint_account: String::new(),
+                token_symbol: String::new(),
+                token_name: String::new(),
+                unusual_decimals: false,
+            },
+            _ => {
+                return Err(SolanaError::ParseTxError(
+                    "parse spl token transfer failed, invalid transfer program".to_string(),
+                ))
+            }
+        };
+        Ok(SolanaOverview::SplTokenTransfer(overview))
     }
     fn build_vote_overview(details: &[SolanaDetail]) -> Result<SolanaOverview> {
         let overview: Option<SolanaOverview> = details
@@ -371,17 +475,110 @@ impl ParsedSolanaTx {
         ))
     }
 
-    fn build_general_overview(details: &[SolanaDetail]) -> Result<SolanaOverview> {
-        let mut overview = Vec::new();
-        details.iter().for_each(|d| {
-            if d.common.program != SolanaTxDisplayType::Unknown.to_string() {
-                overview.push(ProgramOverviewGeneral {
-                    program: d.common.program.to_string(),
-                    method: d.common.method.to_string(),
-                })
+    fn is_represented_by_primary_overview(
+        display_type: &SolanaTxDisplayType,
+        detail: &SolanaDetail,
+    ) -> bool {
+        match display_type {
+            SolanaTxDisplayType::Transfer => Self::is_system_transfer_detail(&detail.common),
+            SolanaTxDisplayType::TokenTransfer => Self::is_token_transfer_detail(&detail.common),
+            SolanaTxDisplayType::Vote => Self::is_vote_detail(&detail.common),
+            SolanaTxDisplayType::JupiterV6 => Self::is_jupiter_v6_detail(&detail.common),
+            SolanaTxDisplayType::SquadsV4 => {
+                Self::is_sqauds_v4_detail(&detail.common)
+                    || Self::is_system_transfer_detail(&detail.common)
             }
-        });
-        Ok(SolanaOverview::General(overview))
+            SolanaTxDisplayType::General | SolanaTxDisplayType::Unknown => false,
+        }
+    }
+
+    fn build_general_items(
+        details: &[SolanaDetail],
+        primary_display_type: Option<&SolanaTxDisplayType>,
+    ) -> Result<Vec<ProgramOverviewGeneral>> {
+        let mut overview = Vec::new();
+        for (index, d) in details.iter().enumerate() {
+            if Self::is_unknown_detail(&d.common)
+                || primary_display_type
+                    .map(|display_type| Self::is_represented_by_primary_overview(display_type, d))
+                    .unwrap_or(false)
+            {
+                continue;
+            }
+            let mut item = ProgramOverviewGeneral {
+                instruction_index: index + 1,
+                program: d.common.program.to_string(),
+                method: d.common.method.to_string(),
+                memo: String::new(),
+                value: String::new(),
+                from: String::new(),
+                to: String::new(),
+                amount: String::new(),
+                source: String::new(),
+                destination: String::new(),
+                authority: String::new(),
+                token: String::new(),
+                mint: String::new(),
+                unusual_decimals: false,
+                decimals: 0,
+                to_in_lookup_table: false,
+                to_lookup_table_reference: String::new(),
+            };
+            match &d.kind {
+                ProgramDetail::SystemTransfer(value) => {
+                    item.value = value.value.clone();
+                    item.from = value.from.clone();
+                    item.to = Self::format_account_for_display(&value.to);
+                    item.to_in_lookup_table = Self::is_lookup_table_reference(&value.to);
+                    if item.to_in_lookup_table {
+                        item.to_lookup_table_reference = value.to.clone();
+                    }
+                }
+                ProgramDetail::TokenTransferChecked(value) => {
+                    Self::validate_token_decimals(&value.mint, value.decimals)?;
+                    let token_info = Self::find_token_info(&value.mint);
+                    let amount = Self::format_token_amount_for_display(
+                        &value.mint,
+                        &value.amount,
+                        value.decimals,
+                    )?;
+                    item.amount = format!("{} {}", amount, token_info.0);
+                    item.source = value.account.clone();
+                    item.destination = value.recipient.clone();
+                    item.authority = value.owner.clone();
+                    item.token = format!("{} ({})", token_info.1, token_info.0);
+                    item.mint = value.mint.clone();
+                    item.unusual_decimals =
+                        Self::has_unusual_token_decimals(&value.mint, value.decimals);
+                    item.decimals = value.decimals;
+                }
+                ProgramDetail::SquadsV4VaultTransactionCreate(value) => {
+                    item.memo = value.memo.clone().unwrap_or_default();
+                }
+                _ => {}
+            }
+            overview.push(item)
+        }
+        Ok(overview)
+    }
+
+    fn build_general_overview(details: &[SolanaDetail]) -> Result<SolanaOverview> {
+        Ok(SolanaOverview::General(Self::build_general_items(
+            details, None,
+        )?))
+    }
+
+    fn build_additional_overviews(
+        display_type: &SolanaTxDisplayType,
+        details: &[SolanaDetail],
+    ) -> Result<Vec<ProgramOverviewGeneral>> {
+        if matches!(
+            display_type,
+            SolanaTxDisplayType::General | SolanaTxDisplayType::Unknown
+        ) {
+            return Ok(Vec::new());
+        }
+        Self::build_general_items(details, Some(display_type))
     }
     fn build_squads_v4_proposal_overview(details: &[SolanaDetail]) -> Result<SolanaOverview> {
         let mut proposal_overview_vec: Vec<ProgramOverviewProposal> = Vec::new();
@@ -461,32 +658,48 @@ impl ParsedSolanaTx {
     fn build_squads_v4_multisig_overview(details: &[SolanaDetail]) -> Result<SolanaOverview> {
         let mut transfer_overview_vec: Vec<ProgramOverviewTransfer> = Vec::new();
         let mut total_value = 0f64;
-        details.iter().for_each(|d| {
+        for d in details {
             if let ProgramDetail::SystemTransfer(v) = &d.kind {
-                total_value += v
+                let value = v
                     .value
                     .to_uppercase()
                     .replace("SOL", "")
                     .trim()
                     .parse::<f64>()
-                    .unwrap();
+                    .map_err(|_| {
+                        SolanaError::ParseTxError("invalid Squads transfer amount".to_string())
+                    })?;
+                total_value += value;
                 transfer_overview_vec.push(ProgramOverviewTransfer {
                     value: v.value.to_string(),
                     main_action: "SOL Transfer".to_string(),
                     from: v.from.to_string(),
                     to: v.to.to_string(),
+                    to_in_lookup_table: Self::is_lookup_table_reference(&v.to),
+                    to_lookup_table_reference: if Self::is_lookup_table_reference(&v.to) {
+                        v.to.clone()
+                    } else {
+                        String::new()
+                    },
                 });
             }
-        });
+        }
         for d in details {
             if let ProgramDetail::SquadsV4MultisigCreate(v) = &d.kind {
-                let memo = v.memo.clone().unwrap();
-                let memo = serde_json::from_str::<serde_json::Value>(&memo).unwrap();
-                let wallet_name = memo["n"]
-                    .as_str()
+                let memo = v
+                    .memo
+                    .as_deref()
+                    .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok());
+                let wallet_name = memo
+                    .as_ref()
+                    .and_then(|value| value["n"].as_str())
                     .unwrap_or("SquadsV4 Multisig Wallet")
                     .to_string();
-                let wallet_desc = memo["d"].as_str().unwrap_or("").to_string();
+                let wallet_desc = memo
+                    .as_ref()
+                    .and_then(|value| value["d"].as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let threshold = v.threshold;
                 let member_count = v.members.len();
                 let members = v
@@ -508,13 +721,20 @@ impl ParsedSolanaTx {
                 ));
             }
             if let ProgramDetail::SquadsV4MultisigCreateV2(v) = &d.kind {
-                let memo = v.memo.clone().unwrap();
-                let memo = serde_json::from_str::<serde_json::Value>(&memo).unwrap();
-                let wallet_name = memo["n"]
-                    .as_str()
+                let memo = v
+                    .memo
+                    .as_deref()
+                    .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok());
+                let wallet_name = memo
+                    .as_ref()
+                    .and_then(|value| value["n"].as_str())
                     .unwrap_or("SquadsV4 Multisig Wallet")
                     .to_string();
-                let wallet_desc = memo["d"].as_str().unwrap_or("").to_string();
+                let wallet_desc = memo
+                    .as_ref()
+                    .and_then(|value| value["d"].as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let threshold = v.threshold;
                 let member_count = v.members.len();
                 let members = v
@@ -646,9 +866,25 @@ impl ParsedSolanaTx {
                     // https://solscan.io/tx/4DHUYxDxy3rykXfTq9EmN6GEYgWQ8W1hCu4cT4B3gpgwrNpFdK1vwGccCNWGnKa8avZArH1tRFferf5ezJyDrivP
                     // https://solscan.io/tx/2mCi5xkVaPxgphtu7z6R1qUt7dmXkFUCHBrepCjSGbT8LjqYnoq9hB7NFtjLvSZ5WGu7cMtsYNbFVpRxEnTb3dRN
                     // index 7 : source token mint
-                    let token_a_mint = v.accounts[7].clone();
+                    let token_a_mint = v
+                        .accounts
+                        .get(7)
+                        .ok_or_else(|| {
+                            SolanaError::ParseTxError(
+                                "Jupiter source mint account is missing".to_string(),
+                            )
+                        })?
+                        .clone();
                     // index 8 : destination token mint
-                    let token_b_mint = v.accounts[8].clone();
+                    let token_b_mint = v
+                        .accounts
+                        .get(8)
+                        .ok_or_else(|| {
+                            SolanaError::ParseTxError(
+                                "Jupiter destination mint account is missing".to_string(),
+                            )
+                        })?
+                        .clone();
                     return Ok(Self::genreate_jupiter_swap_overview(
                         "JupiterV6SharedAccountsRoute",
                         &token_a_mint,
@@ -663,9 +899,25 @@ impl ParsedSolanaTx {
                     // https://solscan.io/tx/4DHUYxDxy3rykXfTq9EmN6GEYgWQ8W1hCu4cT4B3gpgwrNpFdK1vwGccCNWGnKa8avZArH1tRFferf5ezJyDrivP
                     // https://solscan.io/tx/2mCi5xkVaPxgphtu7z6R1qUt7dmXkFUCHBrepCjSGbT8LjqYnoq9hB7NFtjLvSZ5WGu7cMtsYNbFVpRxEnTb3dRN
                     // index 7 : source token mint
-                    let token_a_mint = v.accounts[7].clone();
+                    let token_a_mint = v
+                        .accounts
+                        .get(7)
+                        .ok_or_else(|| {
+                            SolanaError::ParseTxError(
+                                "Jupiter source mint account is missing".to_string(),
+                            )
+                        })?
+                        .clone();
                     // index 8 : destination token mint
-                    let token_b_mint = v.accounts[8].clone();
+                    let token_b_mint = v
+                        .accounts
+                        .get(8)
+                        .ok_or_else(|| {
+                            SolanaError::ParseTxError(
+                                "Jupiter destination mint account is missing".to_string(),
+                            )
+                        })?
+                        .clone();
                     return Ok(Self::genreate_jupiter_swap_overview(
                         "JupiterV6SharedAccountsExactOutRoute",
                         &token_a_mint,
@@ -679,9 +931,25 @@ impl ParsedSolanaTx {
                 ProgramDetail::JupiterV6ExactOutRoute(v) => {
                     // https://solscan.io/tx/XnRGNPgKgtD6Qk8p6Pxg9Z9PRyf5cfUJbjU9grhiDkicbSYUo3h1geaVj87JvZaoeY1VRe2Gcr9aYXH83Vrgki7
                     // index 5 : source token mint
-                    let token_a_mint = v.accounts[5].clone();
+                    let token_a_mint = v
+                        .accounts
+                        .get(5)
+                        .ok_or_else(|| {
+                            SolanaError::ParseTxError(
+                                "Jupiter source mint account is missing".to_string(),
+                            )
+                        })?
+                        .clone();
                     // index 6 : destination token mint
-                    let token_b_mint = v.accounts[6].clone();
+                    let token_b_mint = v
+                        .accounts
+                        .get(6)
+                        .ok_or_else(|| {
+                            SolanaError::ParseTxError(
+                                "Jupiter destination mint account is missing".to_string(),
+                            )
+                        })?
+                        .clone();
                     return Ok(Self::genreate_jupiter_swap_overview(
                         "JupiterV6ExactOutRoute",
                         &token_a_mint,
@@ -697,7 +965,15 @@ impl ParsedSolanaTx {
                     // index 4 : source token mint is Unknown
                     let token_a_mint = "Unknown";
                     // index 5 destination token mint
-                    let token_b_mint = v.accounts[5].clone();
+                    let token_b_mint = v
+                        .accounts
+                        .get(5)
+                        .ok_or_else(|| {
+                            SolanaError::ParseTxError(
+                                "Jupiter destination mint account is missing".to_string(),
+                            )
+                        })?
+                        .clone();
                     return Ok(Self::genreate_jupiter_swap_overview(
                         "JupiterV6Route",
                         token_a_mint,
@@ -743,6 +1019,29 @@ impl ParsedSolanaTx {
         }))
     }
 
+    fn collect_additional_unknown_programs(details: &[SolanaDetail]) -> Vec<String> {
+        if details
+            .iter()
+            .all(|detail| Self::is_unknown_detail(&detail.common))
+        {
+            return Vec::new();
+        }
+        details
+            .iter()
+            .filter_map(|detail| {
+                if !Self::is_unknown_detail(&detail.common) {
+                    return None;
+                }
+                match &detail.kind {
+                    ProgramDetail::Instruction(value) => Some(value.program_account.clone()),
+                    ProgramDetail::Unknown(value) => Some(value.program_account.clone()),
+                    ProgramDetail::RawUnknown(value) => Some(value.program_account.clone()),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
     fn build_overview(
         display_type: &SolanaTxDisplayType,
         details: &[SolanaDetail],
@@ -753,9 +1052,7 @@ impl ParsedSolanaTx {
             SolanaTxDisplayType::General => Self::build_general_overview(details),
             SolanaTxDisplayType::Unknown => Self::build_instructions_overview(details),
             SolanaTxDisplayType::SquadsV4 => Self::build_squads_overview(details),
-            SolanaTxDisplayType::TokenTransfer => {
-                Self::build_token_transfer_checked_overview(details)
-            }
+            SolanaTxDisplayType::TokenTransfer => Self::build_token_transfer_overview(details),
             SolanaTxDisplayType::JupiterV6 => Self::build_jupiter_v6_overview(details),
         }
     }
@@ -767,6 +1064,313 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::*;
+
+    fn detail(program: &str, method: &str) -> SolanaDetail {
+        SolanaDetail {
+            common: CommonDetail {
+                program: program.into(),
+                method: method.into(),
+            },
+            kind: ProgramDetail::GeneralUnknown(ProgramDetailGeneralUnknown::default()),
+        }
+    }
+
+    #[test]
+    fn display_classification_and_account_helpers_cover_security_boundaries() {
+        assert!(ParsedSolanaTx::is_lookup_table_reference("table#255"));
+        assert!(!ParsedSolanaTx::is_lookup_table_reference("#1"));
+        assert!(!ParsedSolanaTx::is_lookup_table_reference("table#256"));
+        assert_eq!(
+            ParsedSolanaTx::format_account_for_display("table#7"),
+            "Table: table\nIndex: 7"
+        );
+        assert_eq!(
+            ParsedSolanaTx::format_account_for_display("ordinary"),
+            "ordinary"
+        );
+
+        assert!(matches!(
+            ParsedSolanaTx::detect_display_type(&[detail("Unknown", "")]),
+            SolanaTxDisplayType::Unknown
+        ));
+        assert!(matches!(
+            ParsedSolanaTx::detect_display_type(&[
+                detail("System", "Transfer"),
+                detail("Unknown", "")
+            ]),
+            SolanaTxDisplayType::Transfer
+        ));
+        assert!(matches!(
+            ParsedSolanaTx::detect_display_type(&[
+                detail("ComputeBudget", "SetComputeUnitLimit"),
+                detail("ComputeBudget", "SetComputeUnitPrice"),
+                detail("JupiterV6", "SharedAccountsRoute")
+            ]),
+            SolanaTxDisplayType::JupiterV6
+        ));
+        let mixed_jupiter = [
+            detail("ComputeBudget", "SetComputeUnitLimit"),
+            detail("ComputeBudget", "SetComputeUnitPrice"),
+            detail("JupiterV6", "SharedAccountsRoute"),
+            detail("Token", "CloseAccount"),
+            detail("Unknown", ""),
+        ];
+        assert!(matches!(
+            ParsedSolanaTx::detect_display_type(&mixed_jupiter),
+            SolanaTxDisplayType::JupiterV6
+        ));
+        let siblings = ParsedSolanaTx::build_additional_overviews(
+            &SolanaTxDisplayType::JupiterV6,
+            &mixed_jupiter,
+        )
+        .unwrap();
+        assert_eq!(siblings.len(), 3);
+        assert_eq!(siblings[0].instruction_index, 1);
+        assert_eq!(siblings[0].program, "ComputeBudget");
+        assert_eq!(siblings[1].instruction_index, 2);
+        assert_eq!(siblings[2].instruction_index, 4);
+        assert_eq!(siblings[2].method, "CloseAccount");
+
+        for (primary, details, expected_addon) in [
+            (
+                SolanaTxDisplayType::Transfer,
+                [
+                    detail("System", "Transfer"),
+                    detail("ComputeBudget", "SetComputeUnitLimit"),
+                ],
+                "ComputeBudget",
+            ),
+            (
+                SolanaTxDisplayType::TokenTransfer,
+                [
+                    detail("Token", "TransferChecked"),
+                    detail("Token", "CloseAccount"),
+                ],
+                "Token",
+            ),
+            (
+                SolanaTxDisplayType::Vote,
+                [detail("Vote", "Vote"), detail("Memo", "Memo")],
+                "Memo",
+            ),
+            (
+                SolanaTxDisplayType::SquadsV4,
+                [
+                    detail("SquadsV4", "ProposalCreate"),
+                    detail("ComputeBudget", "SetComputeUnitLimit"),
+                ],
+                "ComputeBudget",
+            ),
+        ] {
+            let addons = ParsedSolanaTx::build_additional_overviews(&primary, &details).unwrap();
+            assert_eq!(addons.len(), 1);
+            assert_eq!(addons[0].program, expected_addon);
+            assert_eq!(addons[0].instruction_index, 2);
+        }
+        for (program, method, expected) in [
+            ("System", "Transfer", SolanaTxDisplayType::Transfer),
+            (
+                "Token",
+                "TransferChecked",
+                SolanaTxDisplayType::TokenTransfer,
+            ),
+            ("Vote", "Vote", SolanaTxDisplayType::Vote),
+            ("JupiterV6", "Route", SolanaTxDisplayType::JupiterV6),
+            ("Other", "Method", SolanaTxDisplayType::General),
+        ] {
+            let actual = ParsedSolanaTx::detect_display_type(&[detail(program, method)]);
+            assert_eq!(
+                core::mem::discriminant(&actual),
+                core::mem::discriminant(&expected)
+            );
+        }
+        assert!(matches!(
+            ParsedSolanaTx::detect_display_type(&[
+                detail("SquadsV4", "ProposalCreate"),
+                detail("System", "Transfer")
+            ]),
+            SolanaTxDisplayType::SquadsV4
+        ));
+        assert!(ParsedSolanaTx::is_instructions_detail(
+            &detail("Instructions", "").common
+        ));
+    }
+
+    #[test]
+    fn squads_vault_transaction_create_overview_keeps_its_memo() {
+        use crate::solana_lib::squads_v4::instructions::{
+            ProposalCreateArgs, VaultTransactionCreateArgs,
+        };
+
+        const QA_MEMO: &str = concat!(
+            "Keystone offers seamless compatibility with leading wallets such as MetaMask, ",
+            "OKX Wallet, Tonkeeper, Solflare, Backpack, Blue Wallet, Keplr, Eternl and others, ",
+            "ensuring top-tier security for a wide range of cryptocurrencies, including ",
+            "Bitcoin and Ethereum."
+        );
+        let mut details = Vec::new();
+        for (transaction_index, memo) in [(7, QA_MEMO), (8, "Add new member")] {
+            details.push(SolanaDetail {
+                common: CommonDetail {
+                    program: "SquadsV4".to_string(),
+                    method: "VaultTransactionCreate".to_string(),
+                },
+                kind: ProgramDetail::SquadsV4VaultTransactionCreate(VaultTransactionCreateArgs {
+                    vault_index: 0,
+                    ephemeral_signers: 0,
+                    transaction_message: Vec::new(),
+                    memo: Some(memo.to_string()),
+                }),
+            });
+            details.push(SolanaDetail {
+                common: CommonDetail {
+                    program: "SquadsV4".to_string(),
+                    method: "ProposalCreate".to_string(),
+                },
+                kind: ProgramDetail::SquadsV4ProposalCreate(ProposalCreateArgs {
+                    transaction_index,
+                    draft: false,
+                }),
+            });
+        }
+
+        let display_type = ParsedSolanaTx::detect_display_type(&details);
+        assert!(matches!(display_type, SolanaTxDisplayType::SquadsV4));
+        let overview = ParsedSolanaTx::build_overview(&display_type, &details).unwrap();
+        let SolanaOverview::SquadsV4Proposal(items) = overview else {
+            panic!("expected Squads proposal overview");
+        };
+        let vault_memos = items
+            .iter()
+            .filter(|item| item.method == "VaultTransactionCreate")
+            .map(|item| item.memo.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(vault_memos, vec![Some(QA_MEMO), Some("Add new member")]);
+        assert!(items
+            .iter()
+            .filter(|item| item.method == "ProposalCreate")
+            .all(|item| item.memo.is_none()));
+
+        let general_items = ParsedSolanaTx::build_general_items(&details, None).unwrap();
+        let general_vault_memos = general_items
+            .iter()
+            .filter(|item| item.method == "VaultTransactionCreate")
+            .map(|item| item.memo.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(general_vault_memos, vec![QA_MEMO, "Add new member"]);
+    }
+
+    #[test]
+    fn plain_token_transfer_reuses_specialized_transfer_overview() {
+        use crate::parser::detail::ProgramDetailTokenTransfer;
+
+        let details = [SolanaDetail {
+            common: CommonDetail {
+                program: "Token".to_string(),
+                method: "Transfer".to_string(),
+            },
+            kind: ProgramDetail::TokenTransfer(ProgramDetailTokenTransfer {
+                source_account: "source-token-account".to_string(),
+                recipient: "destination-token-account".to_string(),
+                owner: "transfer-authority".to_string(),
+                signers: None,
+                amount: "1000000".to_string(),
+            }),
+        }];
+
+        assert!(matches!(
+            ParsedSolanaTx::detect_display_type(&details),
+            SolanaTxDisplayType::TokenTransfer
+        ));
+        let SolanaOverview::SplTokenTransfer(overview) =
+            ParsedSolanaTx::build_token_transfer_overview(&details).unwrap()
+        else {
+            panic!("expected specialized SPL Token transfer overview");
+        };
+        assert_eq!(overview.amount, "1000000 raw units");
+        assert_eq!(overview.source, "source-token-account");
+        assert_eq!(overview.destination, "destination-token-account");
+        assert_eq!(overview.authority, "transfer-authority");
+        assert!(overview.token_mint_account.is_empty());
+        assert!(overview.token_symbol.is_empty());
+        assert!(overview.token_name.is_empty());
+        assert!(!overview.unusual_decimals);
+    }
+
+    #[test]
+    fn token_metadata_and_decimal_safety_helpers() {
+        let known_mints = [
+            "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+            "MNDEFzGvMt87ueuHvVU9VcTqsAP5b3fTGPsHuuPA5ey",
+            "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3",
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL",
+            "85VBFQZC9TZkfaptBWjvUw7YbZjy52A6mjtPGjstQAmQ",
+            "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+            "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+            "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn",
+            "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",
+            "BZLbGTNCSFfoth2GYDtwr7e4imWzpR5jqcUuGEwr646K",
+            "rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof",
+            "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
+            "7atgF8KQo4wJrD5ATGX7t1V2zVvykPJbFfNeVf1icFv1",
+            "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",
+            "hntyVP6YFm1Hg25TN9WGLqM12b8TQmcknKrdu1oxWux",
+            "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4",
+            "8BMzMi2XxZn9afRaMx5Z6fauk9foHXqV5cLTCYWRcVje",
+            "ukHH6c7mMyiWCf1b9pnWe25TSpkDDt3H5pQZgZ74J82",
+            "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr",
+            "4vMsoUT2BWatFweudnQM1xedRLfJgJ7hswhcpz4xgBTy",
+            "NeonTjSjsuo3rexg9o6vHuMXw62f9V7zvmu8M8Zut44",
+            "MEW1gQWJ3nEXg2qgERiKu7FAFj79PHvQVREQUzScPP5",
+            "TNSRxcUxoT9xBG3de7PiJyTDYu7kskLqcpddxnEJAS6",
+            "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v",
+            "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1",
+            "SRMuApVNdxXokk5GT7XD5cUUgXMBCoAz2LHeuAoKWRt",
+            "5z3EqYQo9HiCEs3R84RCDMu2n7anpDMxRhdK8PSWmrRC",
+            "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo",
+            "z3dn17yLaGMKffVogeFHQ9zWVcXgqgf3PQnDsNs2g6M",
+            "METAewgxyPbgwsseH8T16a39CQ5VyVxZi9zXiDPY18m",
+            "KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS",
+            "DriFtupJYLTosbwoN8koMbEYSx54aFAVLddWsbksjwg7",
+            "FoXyMu5xwXre7zEoSvzViRk3nGawHUp9kUh97y2NDhcq",
+            "7i5KKsX2weiTkry7jA4ZwSuXGhs5eJBEjY8vVxR4pfRx",
+            "5oVNBeEEQvYi1cX3ir8Dx5n1P7pdxydbGF2X4TxVusJm",
+            "EchesyfXePKdLtoiZSL8pBe8Myagyy8ZRqsACNCFGnvp",
+            "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE",
+            "EzgfrTjgFyHGaU5BEBRETyfawt66bAYqJvcryWuJtQ5w",
+            "ZEUS1aR7aX8DFFJf5QjWj2ftDDdNTroMNGo8YoQm3Gq",
+            "mb1eu7TzEc71KxDpsmsKoucSSuuoGLv1drys1oP2jh6",
+            "iotEVVZLEywoTn1QdwNPddxPWszn3zFhEot3MfL9fns",
+            "So11111111111111111111111111111111111111112",
+        ];
+        for mint in known_mints {
+            let (_, name, decimals) = ParsedSolanaTx::find_token_info(mint);
+            assert_ne!(name, "Unknown");
+            assert!(ParsedSolanaTx::validate_token_decimals(mint, decimals).is_ok());
+        }
+        assert!(ParsedSolanaTx::validate_token_decimals(known_mints[3], 9).is_err());
+        assert!(ParsedSolanaTx::has_unusual_token_decimals("unknown", 19));
+        assert!(!ParsedSolanaTx::has_unusual_token_decimals("unknown", 18));
+        assert_eq!(
+            ParsedSolanaTx::format_token_amount_for_display("unknown", "1", 19).unwrap(),
+            "1 raw units (decimals: 19)"
+        );
+        assert!(ParsedSolanaTx::format_token_amount_for_display("unknown", "bad", 19).is_err());
+    }
+
+    #[test]
+    fn overview_builders_reject_missing_required_details() {
+        let empty = &[];
+        assert!(ParsedSolanaTx::build_transfer_overview(empty).is_err());
+        assert!(ParsedSolanaTx::build_token_transfer_overview(empty).is_err());
+        assert!(ParsedSolanaTx::build_vote_overview(empty).is_err());
+        let _ = ParsedSolanaTx::build_squads_v4_proposal_overview(empty);
+        let _ = ParsedSolanaTx::build_squads_v4_multisig_overview(empty);
+        let _ = ParsedSolanaTx::build_squads_overview(empty);
+        let _ = ParsedSolanaTx::build_jupiter_v6_overview(empty);
+        assert!(ParsedSolanaTx::build_instructions_overview(empty).is_ok());
+    }
 
     #[test]
     fn test_parse_transaction_1() {
@@ -932,17 +1536,19 @@ mod tests {
         let data = "0200050a06852df21778a462ea79aae81500eae98a935dcca05f8b899ca8b41021a79980acc933a10d87058ad3131361cd345fe95eb7598ad52d972ee559f1ea3f8deb452bb2df65fdf1ad0514f549457e4338bb71e6885354aa5ed87969ef14f5fc736772295dfa0330919867f6f90f2e334d1a56a2203ec3d4086151aab0171ca13c74b626da01ca1cb62be1bbbf9927dd0de251964d351736fd36100bb0e06f728b4100000000000000000000000000000000000000000000000000000000000000008c97258f4e2489f1bb3d1029148e0d830b5a1399daff1084048e7bd8dbe9f8590b7065b1e3d17c45389d527f6b04c3cd58b86c731aa0fdb549b6d1bc03f8294606a7d517192c5c51218cc94c3d4af17f58daee089ba1fd44e3dbd98a0000000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a92865a919afcfd4d57cf8f69e11990c98a55e4cc4389ba43c7d32184ca652adb406050200013400000000604d160000000000520000000000000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a90902010843000006852df21778a462ea79aae81500eae98a935dcca05f8b899ca8b41021a799800106852df21778a462ea79aae81500eae98a935dcca05f8b899ca8b41021a799800707030100000005087b0012000000536e65616b65722023313830333539303435000000003200000068747470733a2f2f6170692e737465706e2e636f6d2f72756e2f6e66746a736f6e2f3130332f3130363036313531353732319001010100000006852df21778a462ea79aae81500eae98a935dcca05f8b899ca8b41021a799800164010607000400010509080009030104000907010000000000000007090201000000030905080a0a010000000000000000";
         let transaction = Vec::from_hex(data).unwrap();
         let parsed = ParsedSolanaTx::build(&transaction).unwrap();
+        assert_eq!(3, parsed.unknown_programs.len());
         match parsed.overview {
             SolanaOverview::General(overview) => {
-                let overview_1 = overview.get(0).unwrap();
-                let overview_2 = overview.get(1).unwrap();
-                let overview_3 = overview.get(2).unwrap();
-                assert_eq!("System", overview_1.program);
-                assert_eq!("CreateAccount", overview_1.method);
-                assert_eq!("Token", overview_2.program);
-                assert_eq!("InitializeMint", overview_2.method);
-                assert_eq!("Token", overview_3.program);
-                assert_eq!("MintTo", overview_3.method);
+                let expected = [
+                    ("System", "CreateAccount"),
+                    ("Token", "InitializeMint"),
+                    ("Token", "MintTo"),
+                ];
+                assert_eq!(expected.len(), overview.len());
+                for (item, (program, method)) in overview.iter().zip(expected) {
+                    assert_eq!(program, item.program);
+                    assert_eq!(method, item.method);
+                }
             }
             _ => println!("program overview parse error!"),
         };
@@ -1144,23 +1750,21 @@ mod tests {
         let data = "0301070faa30697d8ea2d14ce506c401ad5f1bd33476ebcb8a8b5cea89fa0aafb7c04f3925070f12913aa23553bfaf08f0a6f293aadb24dd66711db239c9b0ccca751b05dcc3a6c16cb67f59d67085e174cd7469f3e00b99a63d6c8d95337096f9e8437d8c17a1e64eba64bb7238d33b21461db8824508c879f91199d9eff9309ff63952baf04e4356057aaea057a6d744e1a0dbb99091448d6c2807114f0a016c9f2c39df8b1e991b87277d51b2ee23b63496ff1a54ab30e61eb4c4572e52fb99af9421e636e5095d76cede0e72ff2a024a07652d423fb7f3978a4663a278d13e1c1ba10deb821d34b39060c73598d3dd86ecf853df3b2f38b02991ad2ccfa51306e01600000000000000000000000000000000000000000000000000000000000000003f5877e18f96dea58c638a21d2be860ba96f0e21d1d84c6a94dba44e2be81f0e494500f4fdcbc9ad22814e250c0d6763266f6ca9169e12662f477601991e1a36be49a1eeb81bf889c158fd8b7496ff9141d4aa433eae3948d0d8488f78951b78069b8857feab8184fb687f634618c035dac439dc1aeb3b5598a0f0000000000106a7d517192c5c51218cc94c3d4af17f58daee089ba1fd44e3dbd98a0000000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a954c495b382bac905bb70f97bc252b2ee3b796b2836a3287ed5787c70eb2484120608020001340000000030266d0500000000a50000000000000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a90e04010c000d01010e03010200090440084e05000000000b0a090a020106030504070e110140084e05000000005d4d3700000000000e02010001050e030100000109";
         let transaction = Vec::from_hex(data).unwrap();
         let parsed = ParsedSolanaTx::build(&transaction).unwrap();
+        assert_eq!(1, parsed.unknown_programs.len());
         match parsed.overview {
             SolanaOverview::General(overview) => {
-                let overview_1 = overview.get(0).unwrap();
-                assert_eq!("System", overview_1.program);
-                assert_eq!("CreateAccount", overview_1.method);
-                let overview_2 = overview.get(1).unwrap();
-                assert_eq!("Token", overview_2.program);
-                assert_eq!("InitializeAccount", overview_2.method);
-                let overview_3 = overview.get(2).unwrap();
-                assert_eq!("Token", overview_3.program);
-                assert_eq!("Approve", overview_3.method);
-                let overview_4 = overview.get(3).unwrap();
-                assert_eq!("Token", overview_4.program);
-                assert_eq!("Revoke", overview_4.method);
-                let overview_5 = overview.get(4).unwrap();
-                assert_eq!("Token", overview_5.program);
-                assert_eq!("CloseAccount", overview_5.method);
+                let expected = [
+                    ("System", "CreateAccount"),
+                    ("Token", "InitializeAccount"),
+                    ("Token", "Approve"),
+                    ("Token", "Revoke"),
+                    ("Token", "CloseAccount"),
+                ];
+                assert_eq!(expected.len(), overview.len());
+                for (item, (program, method)) in overview.iter().zip(expected) {
+                    assert_eq!(program, item.program);
+                    assert_eq!(method, item.method);
+                }
             }
             _ => println!("program overview parse error!"),
         };
@@ -1235,30 +1839,16 @@ mod tests {
         let parsed = ParsedSolanaTx::build(&transaction).unwrap();
         let detail_tx = parsed.detail;
         let parsed_detail: Value = serde_json::from_str(detail_tx.as_str()).unwrap();
-        let expect_data = json!({
-          "accounts": [
-            "NjordRPSzFs8XQUKMjGrhPcmGo9yfC9HP3VHmh8xZpZ",
-            "ComputeBudget111111111111111111111111111111",
-            "YmirFH6wUrtUMUmfRPZE7TcnszDw689YNWYrMgyB55N"
-          ],
-          "block_hash": "EBkkMFBA3ArcDiCkQtFyP7omptVXKoK23joaJoDUDqTF",
-          "header": {
-            "num_readonly_signed_accounts": 0,
-            "num_readonly_unsigned_accounts": 2,
-            "num_required_signatures": 1
-          },
-          "instructions": [
+        let expect_data = json!([
             {
-              "accounts": [],
-              "data": "Hg27aP",
-              "program": "Unknown",
-              "program_account": "ComputeBudget111111111111111111111111111111"
+              "compute_unit_limit": "542092",
+              "method": "SetComputeUnitLimit",
+              "program": "ComputeBudget"
             },
             {
-              "accounts": [],
-              "data": "3Ju5f2HYNk7Z",
-              "program": "Unknown",
-              "program_account": "ComputeBudget111111111111111111111111111111"
+              "compute_unit_price_micro_lamports": "99872",
+              "method": "SetComputeUnitPrice",
+              "program": "ComputeBudget"
             },
             {
               "accounts": [
@@ -1306,8 +1896,7 @@ mod tests {
               "program": "Unknown",
               "program_account": "YmirFH6wUrtUMUmfRPZE7TcnszDw689YNWYrMgyB55N"
             }
-          ]
-        });
+        ]);
         assert_eq!(expect_data, parsed_detail);
     }
 
@@ -1561,97 +2150,12 @@ mod tests {
         // https://solscan.io/tx/3KCJ2aWgKc6cyEagFdk74WfM9eDw7VumB7rPw96fQkD1CmjG3w29gTazDEvNsc2bNbkQaZAvL2att11Siy8qF89k
         let data = "0301080fae0e9965d80b3bb521ed714366a4d461fd58d7b7c97caa15564ba34c3ec5c04d940d487f489c470872533e2d8b55a5ec1ae1fd130cefae0f1bd1527a9b6955c1ab9daad5867d8a4dba28bb9b9bc4146bc81a83e877c01d693d9860e2863df6f5aaf29edc6d0d3544fccda1232277d6032783264c5cfc335600c85f30754adaa9f604b96c15a6018a88598d0c5a310fe2b6333aa48ba916e502be02578ca50384cc51e45da7f68a2906979e692c1e8bc87e51deca9ddfe7e673895a01ef80facf5f4019373457f129bf4cae6a4255518b885bf718157dd4357233dc79268c4cbf069b8857feab8184fb687f634618c035dac439dc1aeb3b5598a0f0000000000106a7d517192c5c51218cc94c3d4af17f58daee089ba1fd44e3dbd98a0000000006a7d51718c774c928566398691d5eb68b5eb8a39b4b6d5c73555b210000000023166cdfc331b06925f390147d4270172c25a5b218580326b09081a9f3bbe90c051e8a28c6a067b32fbb33323ed92334b6adbdc4639b871c8a2e44f47058ef8506ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a900000000000000000000000000000000000000000000000000000000000000000508c2ceb1b5d05c874980ac52cf659740e7e9b9356aaf2a0362673263526c15e83b5d0c7735cf4f76914b1488bc665d32dce3140950851428922cc65fbb565b070c03030200090424eb0700000000000d0200013400000000f01d1f0000000000a50000000000000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a90c040107000801010e02090401080e0a03010405060a0b02090c090424eb0700000000000c02030001050c03010000010901";
         let transaction = Vec::from_hex(data).unwrap();
-        let parsed = ParsedSolanaTx::build(&transaction).unwrap();
-        match parsed.overview {
-            SolanaOverview::General(overview) => {
-                let overview_1 = overview.get(0).unwrap();
-                assert_eq!("Token", overview_1.program);
-                assert_eq!("Approve", overview_1.method);
-                let overview_2 = overview.get(1).unwrap();
-                assert_eq!("System", overview_2.program);
-                assert_eq!("CreateAccount", overview_2.method);
-                let overview_3 = overview.get(2).unwrap();
-                assert_eq!("Token", overview_3.program);
-                assert_eq!("InitializeAccount", overview_3.method);
-                let overview_4 = overview.get(3).unwrap();
-                assert_eq!("TokenLending", overview_4.program);
-                assert_eq!("DepositReserveLiquidity", overview_4.method);
-                let overview_5 = overview.get(4).unwrap();
-                assert_eq!("Token", overview_5.program);
-                assert_eq!("Revoke", overview_5.method);
-                let overview_6 = overview.get(5).unwrap();
-                assert_eq!("Token", overview_6.program);
-                assert_eq!("CloseAccount", overview_6.method);
-            }
-            _ => println!("program overview parse error!"),
-        };
-        let parsed_detail: Value = serde_json::from_str(parsed.detail.as_str()).unwrap();
-
-        let expected_detail = json!([
-          {
-            "amount": "518948",
-            "delegate_account": "CYvAAqCR6LjctqdWvPe1CfBW9p5uSc85Da45gENrVSr8",
-            "method": "Approve",
-            "owner": "CiSrMrPbsnr2pXFHEKXSvHqw1r29qbpRnK1qV9n7zYCC",
-            "program": "Token",
-            "source_account": "CWJtEyYYHy3ydjHn5Beh48mHiW9BBHSYjcGDJkB8awNx"
-          },
-          {
-            "amount": "2039280",
-            "funding_account": "CiSrMrPbsnr2pXFHEKXSvHqw1r29qbpRnK1qV9n7zYCC",
-            "method": "CreateAccount",
-            "new_account": "Axw63e2KwrSmqWsZcNUQNXHH4cSfv2xEJBZG7Ua5Rrit",
-            "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-            "program": "System",
-            "space": "165"
-          },
-          {
-            "account": "Axw63e2KwrSmqWsZcNUQNXHH4cSfv2xEJBZG7Ua5Rrit",
-            "method": "InitializeAccount",
-            "mint": "So11111111111111111111111111111111111111112",
-            "owner": "CiSrMrPbsnr2pXFHEKXSvHqw1r29qbpRnK1qV9n7zYCC",
-            "program": "Token",
-            "sysver_rent": "SysvarRent111111111111111111111111111111111"
-          },
-          {
-            "accounts": [
-              "SysvarC1ock11111111111111111111111111111111",
-              "HZMUNJQDwT8rdEiY2r15UR6h8yYg7QkxiekjyJGFFwnB"
-            ],
-            "data": "9",
-            "program": "Unknown",
-            "program_account": "LendZqTs7gn5CTSJU1jWKhKuVpjJGom45nnwPb2AMTi"
-          },
-          {
-            "destination_collateral_account": "Axw63e2KwrSmqWsZcNUQNXHH4cSfv2xEJBZG7Ua5Rrit",
-            "lending_market_account": "3My6wgR1fHmDFqBvv1hys7PigtH1megLncRCh2PkBMTR",
-            "lending_market_authority_pubkey": "Lz3nGpTr7SfSf7eJqcoQEkXK2fSK3dfCoSdQSKxbXxQ",
-            "liquidity_amount": "518948",
-            "method": "DepositReserveLiquidity",
-            "program": "TokenLending",
-            "reserve_account": "HZMUNJQDwT8rdEiY2r15UR6h8yYg7QkxiekjyJGFFwnB",
-            "reserve_collateral_mint": "7QpRNyLenfoUA8SrpDTaaurtx4JxAJ2j4zdkNUMsTa6A",
-            "reserve_liquidity_supply_account": "EkabaFX962r7gbdjQ6i2kfbrjFA6XppgKZ4APeUhA7gS",
-            "source_liquidity_account": "CWJtEyYYHy3ydjHn5Beh48mHiW9BBHSYjcGDJkB8awNx",
-            "sysvar_clock": "SysvarC1ock11111111111111111111111111111111",
-            "token_program_id": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-            "user_transfer_authority_pubkey": "CYvAAqCR6LjctqdWvPe1CfBW9p5uSc85Da45gENrVSr8"
-          },
-          {
-            "method": "Revoke",
-            "owner": "CiSrMrPbsnr2pXFHEKXSvHqw1r29qbpRnK1qV9n7zYCC",
-            "program": "Token",
-            "source_account": "CWJtEyYYHy3ydjHn5Beh48mHiW9BBHSYjcGDJkB8awNx"
-          },
-          {
-            "account": "Axw63e2KwrSmqWsZcNUQNXHH4cSfv2xEJBZG7Ua5Rrit",
-            "method": "CloseAccount",
-            "owner": "CiSrMrPbsnr2pXFHEKXSvHqw1r29qbpRnK1qV9n7zYCC",
-            "program": "Token",
-            "recipient": "CiSrMrPbsnr2pXFHEKXSvHqw1r29qbpRnK1qV9n7zYCC"
-          }
-        ]);
-        assert_eq!(expected_detail, parsed_detail);
+        let result = ParsedSolanaTx::build(&transaction);
+        assert!(matches!(
+            result,
+            Err(SolanaError::InvalidData(message))
+                if message == "trailing bytes after message"
+        ));
     }
 
     #[test]

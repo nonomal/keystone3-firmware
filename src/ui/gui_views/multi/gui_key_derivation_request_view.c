@@ -4,6 +4,7 @@
 #include "gui_key_derivation_request_widgets.h"
 #include "gui_keyboard_hintbox.h"
 #include "gui_lock_widgets.h"
+#include "gui_usb_transport_widgets.h"
 
 int32_t GuiKeyDerivationRequestViewEventProcess(void *self, uint16_t usEvent, void *param, uint16_t usLen)
 {
@@ -54,6 +55,9 @@ int32_t GuiKeyDerivationRequestViewEventProcess(void *self, uint16_t usEvent, vo
         break;
     case SIG_INIT_PULLOUT_USB:
         GuiKeyDeriveUsbPullout();
+        break;
+    case SIG_CLOSE_KEY_DERIVATION_REQUEST:
+        UsbGoToHomeView();
         break;
     default:
         return ERR_GUI_UNHANDLED;

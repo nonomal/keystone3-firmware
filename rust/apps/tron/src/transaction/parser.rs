@@ -20,12 +20,15 @@ pub struct OverviewTx {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct DetailTx {
     pub value: String,
+    pub raw_value: String,
     pub method: String,
     pub from: String,
     pub to: String,
     pub network: String,
     pub token: String,
     pub contract_address: String,
+    pub memo: String,
+    pub expiration: String,
 }
 
 pub trait TxParser {
@@ -34,21 +37,30 @@ pub trait TxParser {
 
 impl TxParser for WrappedTron {
     fn parse(&self) -> Result<ParsedTx> {
+        let value = self.format_amount()?;
+        let method = self.format_method()?;
+        let from = self.from.to_string();
+        let to = self.to.to_string();
+        let network = NETWORK.to_string();
+
         let overview = OverviewTx {
-            value: self.format_amount()?,
-            method: self.format_method()?,
-            from: self.from.to_string(),
-            to: self.to.to_string(),
-            network: NETWORK.to_string(),
+            value: value.clone(),
+            method: method.clone(),
+            from: from.clone(),
+            to: to.clone(),
+            network: network.clone(),
         };
         let detail = DetailTx {
-            value: self.format_amount()?,
-            method: self.format_method()?,
-            from: self.from.to_string(),
-            to: self.to.to_string(),
-            network: NETWORK.to_string(),
+            value,
+            raw_value: self.value.clone(),
+            method,
+            from,
+            to,
+            network,
             contract_address: self.contract_address.to_string(),
             token: self.token.to_string(),
+            memo: self.memo.clone(),
+            expiration: self.expiration.clone(),
         };
         Ok(ParsedTx { overview, detail })
     }
@@ -85,8 +97,8 @@ mod tests {
             "TS5zPoC4XEBmHvDNAnnW2gH3MQhcRN6iRm".to_string(),
             parsed_tx.detail.to
         );
-        assert_eq!("TRON".to_string(), parsed_tx.overview.network);
-        assert_eq!("TRON".to_string(), parsed_tx.detail.network);
+        assert_eq!("Tron Mainnet".to_string(), parsed_tx.overview.network);
+        assert_eq!("Tron Mainnet".to_string(), parsed_tx.detail.network);
         assert_eq!("0.000001 TRX".to_string(), parsed_tx.overview.value);
         assert_eq!("0.000001 TRX".to_string(), parsed_tx.detail.value);
         assert_eq!("TRX Transfer".to_string(), parsed_tx.detail.method);
@@ -119,8 +131,8 @@ mod tests {
             "TS5zPoC4XEBmHvDNAnnW2gH3MQhcRN6iRm".to_string(),
             parsed_tx.detail.to
         );
-        assert_eq!("TRON".to_string(), parsed_tx.overview.network);
-        assert_eq!("TRON".to_string(), parsed_tx.detail.network);
+        assert_eq!("Tron Mainnet".to_string(), parsed_tx.overview.network);
+        assert_eq!("Tron Mainnet".to_string(), parsed_tx.detail.network);
         assert_eq!("0.001 BTT".to_string(), parsed_tx.overview.value);
         assert_eq!("0.001 BTT".to_string(), parsed_tx.detail.value);
         assert_eq!("TRC-10 Transfer".to_string(), parsed_tx.detail.method);
@@ -154,8 +166,8 @@ mod tests {
                 "TS5zPoC4XEBmHvDNAnnW2gH3MQhcRN6iRm".to_string(),
                 parsed_tx.detail.to
             );
-            assert_eq!("TRON".to_string(), parsed_tx.overview.network);
-            assert_eq!("TRON".to_string(), parsed_tx.detail.network);
+            assert_eq!("Tron Mainnet".to_string(), parsed_tx.overview.network);
+            assert_eq!("Tron Mainnet".to_string(), parsed_tx.detail.network);
             assert_eq!("0.001987 USDT".to_string(), parsed_tx.overview.value);
             assert_eq!("0.001987 USDT".to_string(), parsed_tx.detail.value);
             assert_eq!("TRC-20 Transfer".to_string(), parsed_tx.detail.method);
@@ -164,7 +176,7 @@ mod tests {
                 "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t".to_string(),
                 parsed_tx.detail.contract_address
             );
-            assert!(parsed_tx.detail.token.is_empty());
+            assert_eq!("USDT".to_string(), parsed_tx.detail.token);
         }
         {
             let hex = "1f8b08000000000000036590bb4ec2500086158d212c4ae3409848638231697aaeeda993012f040a166c8074316d4f1b01a1da969b2383a3cfe0ec03b0bac81b38b8b8bab8b9b85a66bf7cc33f7ef9d32961b7199603ee158c30880337b8cdaf52e99490a648254405585ca632db66ebb2211c4080d6320901db9708f76dc9810c4b34c157180714a07cb62e135294a1468b32489461e1ebf169b580873ba5ef4d4134cbe7ba4ef98c5a555e1b75c65ed49df560db98f6f5f6b06359732d2f9aa7837034ad3f443066fde0a27d17e90a19d6303c0b5bb8177771248a666512c57a496db6260ebfbf31c60d7b6e065a87f6355c1f20ab3239da40fb10fce7b89139819e9ff47ac4610e5320f21dc401c19801e062c23d9ff89ae203e051c55535d725d4b63972806d3305a8d4657b9f3fcb5ceee3e5fd6d014bd9cc56f5ca14d2eb97ae9395132acfbf4ae1d5f803c61a369f5e010000";

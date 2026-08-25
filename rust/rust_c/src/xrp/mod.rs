@@ -1,27 +1,17 @@
 use alloc::format;
-use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::slice;
-use core::str::FromStr;
 
 use app_xrp::errors::XRPError;
-use bitcoin::bip32::{DerivationPath, Xpub};
-use bitcoin::secp256k1;
 use cty::c_char;
 
-use serde_json::Value;
 use ur_registry::bytes::Bytes;
-use ur_registry::pb;
-use ur_registry::pb::protoc::base::Content::ColdVersion;
-use ur_registry::pb::protoc::payload::Content;
-use ur_registry::pb::protoc::sign_transaction::Transaction::XrpTx;
 use ur_registry::traits::RegistryItem;
 
-use crate::common::errors::{ErrorCodes, KeystoneError, RustCError};
-use crate::common::keystone::build_payload;
+use crate::common::errors::ErrorCodes;
 use crate::common::structs::{SimpleResponse, TransactionCheckResult, TransactionParseResult};
 use crate::common::types::{PtrBytes, PtrString, PtrT, PtrUR};
-use crate::common::ur::{QRCodeType, UREncodeResult, FRAGMENT_MAX_LENGTH_DEFAULT};
+use crate::common::ur::{UREncodeResult, FRAGMENT_MAX_LENGTH_DEFAULT};
 use crate::common::utils::{convert_c_char, recover_c_char};
 use crate::extract_array;
 use crate::extract_ptr_with_type;
@@ -72,112 +62,6 @@ pub unsafe extern "C" fn xrp_parse_tx(ptr: PtrUR) -> PtrT<TransactionParseResult
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn xrp_sign_tx_bytes(
-    ptr: PtrUR,
-    seed: PtrBytes,
-    seed_len: u32,
-    mfp: PtrBytes,
-    mfp_len: u32,
-    root_xpub: PtrString,
-) -> PtrT<UREncodeResult> {
-    let seed = extract_array!(seed, u8, seed_len);
-    let mfp = extract_array!(mfp, u8, mfp_len);
-    let payload = build_payload(ptr, QRCodeType::Bytes).unwrap();
-    let content = payload.content.unwrap();
-    let sign_tx = match content {
-        Content::SignTx(sign_tx) => sign_tx,
-        _ => {
-            return UREncodeResult::from(RustCError::InvalidData(
-                "Cant get sign tx struct data".to_string(),
-            ))
-            .c_ptr();
-        }
-    };
-    let tx = sign_tx.transaction.unwrap();
-    let hd_path = sign_tx.hd_path;
-    let xrp_tx = match tx {
-        XrpTx(tx) => tx,
-        _ => {
-            return UREncodeResult::from(RustCError::InvalidData(
-                "Cant get xrp tx struct data".to_string(),
-            ))
-            .c_ptr();
-        }
-    };
-    let root_xpub = recover_c_char(root_xpub);
-    let xpub = Xpub::from_str(&root_xpub).unwrap();
-    let k1 = secp256k1::Secp256k1::new();
-    // M/44'/144'/0'/0/0 -> 0/0
-    let split_hd_path: Vec<&str> = hd_path.split('/').collect();
-    let derive_hd_path = format!("{}/{}", split_hd_path[4], split_hd_path[5]);
-    let five_level_xpub = xpub
-        .derive_pub(
-            &k1,
-            &DerivationPath::from_str(format!("m/{derive_hd_path}").as_str()).unwrap(),
-        )
-        .unwrap();
-    let key = five_level_xpub.public_key.serialize();
-    let tx_str = format!(
-        r#"{{
-            "Account": "{}",
-            "Amount": "{}",
-            "Destination":"{}",
-            "Fee": "{}",
-            "Flags": 2147483648,
-            "Sequence": {},
-            "TransactionType": "Payment",
-            "SigningPubKey": "{}",
-            "DestinationTag":{}
-        }}"#,
-        xrp_tx.change_address,
-        xrp_tx.amount,
-        xrp_tx.to,
-        xrp_tx.fee,
-        xrp_tx.sequence,
-        hex::encode(key).to_uppercase(),
-        xrp_tx.tag
-    );
-
-    let v: Value = serde_json::from_str(tx_str.as_str()).unwrap();
-    let input_bytes = v.to_string().into_bytes();
-
-    let sign_result = app_xrp::sign_tx(input_bytes.as_slice(), &hd_path, seed);
-    let tx_hash = app_xrp::get_tx_hash(input_bytes.as_slice()).unwrap();
-    let raw_tx = sign_result.unwrap();
-    let raw_tx_hex = hex::encode(raw_tx);
-    // generate a qr code
-    let sign_tx_result = ur_registry::pb::protoc::SignTransactionResult {
-        sign_id: sign_tx.sign_id,
-        tx_id: tx_hash.to_uppercase().to_string(),
-        raw_tx: raw_tx_hex.clone().to_string(),
-    };
-    let content = ur_registry::pb::protoc::payload::Content::SignTxResult(sign_tx_result);
-    let payload = ur_registry::pb::protoc::Payload {
-        // type is ur_registry::pb::protoc::payload::Type::SignTxResult
-        r#type: 9,
-        xfp: hex::encode(mfp),
-        content: Some(content),
-    };
-    let base = ur_registry::pb::protoc::Base {
-        version: 1,
-        description: "keystone qrcode".to_string(),
-        data: Some(payload),
-        device_type: "keystone Pro".to_string(),
-        content: Some(ColdVersion(31206)),
-    };
-    let base_vec = ur_registry::pb::protobuf_parser::serialize_protobuf(base);
-    // zip data can reduce the size of the data
-    let zip_data = pb::protobuf_parser::zip(&base_vec).unwrap();
-    // data --> protobuf --> zip protobuf data --> cbor bytes data
-    UREncodeResult::encode(
-        ur_registry::bytes::Bytes::new(zip_data).try_into().unwrap(),
-        ur_registry::bytes::Bytes::get_registry_type().get_type(),
-        FRAGMENT_MAX_LENGTH_DEFAULT,
-    )
-    .c_ptr()
-}
-
-#[no_mangle]
 pub unsafe extern "C" fn xrp_sign_tx(
     ptr: PtrUR,
     hd_path: PtrString,
@@ -217,69 +101,4 @@ pub unsafe extern "C" fn xrp_check_tx(
         Ok(p) => TransactionCheckResult::error(ErrorCodes::Success, p).c_ptr(),
         Err(e) => TransactionCheckResult::from(e).c_ptr(),
     }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn is_keystone_xrp_tx(ur_data_ptr: PtrUR) -> bool {
-    // if data can be parsed by protobuf, it is a keyston hot app version2 tx or it is a xrp tx
-    let payload = build_payload(ur_data_ptr, QRCodeType::Bytes);
-    payload.is_ok()
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn xrp_check_tx_bytes(
-    ptr: PtrUR,
-    master_fingerprint: PtrBytes,
-    length: u32,
-    ur_type: QRCodeType,
-) -> PtrT<TransactionCheckResult> {
-    if length != 4 {
-        return TransactionCheckResult::from(RustCError::InvalidMasterFingerprint).c_ptr();
-    }
-    let payload = build_payload(ptr, ur_type);
-    match payload {
-        Ok(payload) => {
-            let mfp = extract_array!(master_fingerprint, u8, 4);
-            let mfp: [u8; 4] = mfp.to_vec().try_into().unwrap();
-
-            let xfp = payload.xfp;
-            let xfp_vec: [u8; 4] = hex::decode(xfp).unwrap().try_into().unwrap();
-            if mfp == xfp_vec {
-                TransactionCheckResult::error(ErrorCodes::Success, "".to_string()).c_ptr()
-            } else {
-                TransactionCheckResult::from(RustCError::MasterFingerprintMismatch).c_ptr()
-            }
-        }
-        Err(e) => TransactionCheckResult::from(KeystoneError::ProtobufError(e.to_string())).c_ptr(),
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn xrp_parse_bytes_tx(
-    ptr: PtrUR,
-) -> PtrT<TransactionParseResult<DisplayXrpTx>> {
-    let payload = build_payload(ptr, QRCodeType::Bytes).unwrap();
-    let content = payload.content.unwrap();
-    let sign_tx = match content {
-        Content::SignTx(sign_tx) => sign_tx,
-        _ => {
-            return TransactionParseResult::from(RustCError::InvalidData(
-                "Cant get sign tx struct data".to_string(),
-            ))
-            .c_ptr();
-        }
-    };
-    let tx = sign_tx.transaction.unwrap();
-    let xrp_tx = match tx {
-        XrpTx(tx) => tx,
-        _ => {
-            return TransactionParseResult::from(RustCError::InvalidData(
-                "Cant get xrp tx struct data".to_string(),
-            ))
-            .c_ptr();
-        }
-    };
-
-    let display_xrp = DisplayXrpTx::try_from(xrp_tx).unwrap();
-    TransactionParseResult::success(display_xrp.c_ptr()).c_ptr()
 }

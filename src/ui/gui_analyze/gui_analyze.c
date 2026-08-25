@@ -421,6 +421,30 @@ void GuiWidgetBaseInit(lv_obj_t *obj, cJSON *json)
     cJSON *childrenArray = cJSON_GetObjectItem(json, "children");
     if (childrenArray != NULL) {
         for (cJSON *child = childrenArray->child; child != NULL; child = child->next) {
+#ifdef FEATURE_SOLANA
+            cJSON *type = cJSON_GetObjectItem(child, "type");
+            cJSON *textFunc = cJSON_GetObjectItem(child, "text_func");
+            if (type != NULL && textFunc != NULL &&
+                !strcmp(type->valuestring, "label") &&
+                (!strcmp(textFunc->valuestring, "GetSolMessageUtf8") ||
+                 !strcmp(textFunc->valuestring, "GetSolMessageRaw"))) {
+                GuiShowSolMessagePaged(obj, g_totalData,
+                                       !strcmp(textFunc->valuestring, "GetSolMessageRaw"));
+                continue;
+            }
+#endif
+#ifdef FEATURE_ETHEREUM
+            cJSON *ethType = cJSON_GetObjectItem(child, "type");
+            cJSON *ethTextFunc = cJSON_GetObjectItem(child, "text_func");
+            if (ethType != NULL && ethTextFunc != NULL &&
+                !strcmp(ethType->valuestring, "label") &&
+                (!strcmp(ethTextFunc->valuestring, "GetMessageUtf8") ||
+                 !strcmp(ethTextFunc->valuestring, "GetMessageRaw"))) {
+                GuiShowEthMessagePaged(obj, g_totalData,
+                                       !strcmp(ethTextFunc->valuestring, "GetMessageRaw"));
+                continue;
+            }
+#endif
             GuiWidgetFactoryCreate(obj, child);
         }
     }
@@ -519,7 +543,6 @@ static void DisplayJsonRecursive(lv_obj_t *parent, cJSON *item, int indent, uint
         if (cJSON_IsObject(item)) {
             DisplayJsonRecursive(parent, item->child, indent + 1, yOffset);
         } else if (cJSON_IsArray(item)) {
-            int size = cJSON_GetArraySize(item);
             for (int i = 0; i < 1; i++) {
                 cJSON* subitem = cJSON_GetArrayItem(item, i);
                 DisplayJsonRecursive(parent, subitem, indent, yOffset);

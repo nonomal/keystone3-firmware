@@ -63,7 +63,7 @@ pub fn get_network_by_chain_id(chain_id: &str) -> Result<String> {
     Ok(map
         .get(chain_id_prefix.as_str())
         .map(|v| v.to_string())
-        .unwrap_or("Cosmos Hub".to_string()))
+        .unwrap_or("Unknown Network".to_string()))
 }
 
 pub fn get_chain_id_by_address(address: &str) -> String {
@@ -130,6 +130,10 @@ mod tests {
         assert_eq!(
             get_network_by_chain_id("dymension_1100-1").unwrap(),
             "Dymension"
+        );
+        assert_eq!(
+            get_network_by_chain_id("evilchain-999").unwrap(),
+            "Unknown Network"
         );
     }
 

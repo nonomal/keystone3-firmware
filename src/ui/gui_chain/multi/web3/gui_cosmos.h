@@ -1,5 +1,6 @@
 #include "rust.h"
 #include "account_public_info.h"
+#include "lvgl.h"
 #define COSMOS_CHAINS_LEN (CHAIN_TGD - CHAIN_BABYLON + 1)
 
 typedef struct {
@@ -41,7 +42,6 @@ void GetCosmosAddress1Value(void *indata, void *param, uint32_t maxLen);
 void GetCosmosAddress1Label(void *indata, void *param, uint32_t maxLen);
 void GetCosmosAddress2Value(void *indata, void *param, uint32_t maxLen);
 void GetCosmosAddress2Label(void *indata, void *param, uint32_t maxLen);
-void GetCosmosMaxFee(void *indata, void *param, uint32_t maxLen);
 void GetCosmosFee(void *indata, void *param, uint32_t maxLen);
 void GetCosmosGasLimit(void *indata, void *param, uint32_t maxLen);
 void GetCosmosChainId(void *indata, void *param, uint32_t maxLen);
@@ -73,3 +73,5 @@ void GetCosmosDetailItemValue(void *indata, void *param, uint32_t maxLen);
 bool IsCosmosMsg(ViewType viewType);
 char *GetKeplrConnectionDisplayAddressByIndex(uint32_t index);
 char *GetCosmosChainAddressByCoinTypeAndIndex(uint8_t chainType, uint32_t address_index);
+void GuiCosmosTxOverview(lv_obj_t *parent, void *totalData);
+void GuiCosmosTxDetails(lv_obj_t *parent, void *totalData);

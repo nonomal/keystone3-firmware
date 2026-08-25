@@ -7,57 +7,22 @@
 void GuiSetEthUrData(URParseResult *urResult, URParseMultiResult *urMultiResult, bool multi);
 void *GuiGetEthData(void);
 PtrT_TransactionCheckResult GuiGetEthCheckResult(void);
-void GetEthValue(void *indata, void *param, uint32_t maxLen);
-void GetEthTxFee(void *indata, void *param, uint32_t maxLen);
-void GetEthGasPrice(void *indata, void *param, uint32_t maxLen);
-void GetEthGasLimit(void *indata, void *param, uint32_t maxLen);
-
-void GetEthNetWork(void *indata, void *param, uint32_t maxLen);
-
-void GetEthTransType(void *indata, void *param, uint32_t maxLen);
-
-void GetEthMaxFee(void *indata, void *param, uint32_t maxLen);
-void GetEthMaxPriority(void *indata, void *param, uint32_t maxLen);
-void GetEthMaxFeePrice(void *indata, void *param, uint32_t maxLen);
-void GetEthMaxPriorityFeePrice(void *indata, void *param, uint32_t maxLen);
+void GuiEthTxOverview(lv_obj_t *parent, void *totalData);
+void GuiEthTxDetails(lv_obj_t *parent, void *totalData);
 
 UREncodeResult *GuiGetEthSignQrCodeData(void);
 UREncodeResult *GuiGetEthSignUrDataUnlimited(void);
-void GetEthGetFromAddress(void *indata, void *param, uint32_t maxLen);
-void GetEthGetToAddress(void *indata, void *param, uint32_t maxLen);
-void GetEthGetDetailPageToAddress(void *indata, void *param, uint32_t maxLen);
-void GetTxnFeeDesc(void *indata, void *param, uint32_t maxLen);
-void GetEthToFromSize(uint16_t *width, uint16_t *height, void *param);
-void GetEthToLabelPos(uint16_t *x, uint16_t *y, void *param);
 void GetEthTypeDomainPos(uint16_t *x, uint16_t *y, void *param);
 void GetEthMessagePos(uint16_t *x, uint16_t *y, void *param);
-void GetEthEnsName(void *indata, void *param, uint32_t maxLen);
-void GetToEthEnsName(void *indata, void *param, uint32_t maxLen);
-void GetEthInputData(void *indata, void *param, uint32_t maxLen);
-void GetEthNonce(void *indata, void *param, uint32_t maxLen);
-int GetEthInputDataLen(void *param);
 bool GetEthTypeDataHashExist(void *indata, void *param);
 bool GetEthContractFromInternal(char *address, char *inputData);
 bool GetEthTypeDataChainExist(void *indata, void *param);
 bool GetEthTypeDataVersionExist(void *indata, void *param);
 bool GetEthContractFromExternal(char *address, char *selectorId, uint64_t chainId, char *inputData);
-void GetEthMethodName(void *indata, void *param, uint32_t maxLen);
-void GetEthContractName(void *indata, void *param, uint32_t maxLen);
-void GetEthTransactionData(void *indata, void *param, uint32_t maxLen);
-bool GetEthEnsExist(void *indata, void *param);
-bool GetToEthEnsExist(void *indata, void *param);
-bool GetEthContractDataExist(void *indata, void *param);
-bool GetEthContractDataNotExist(void *indata, void *param);
 void GetEthGetSignerAddress(void *indata, void *param, uint32_t maxLen);
-void GetEthContractDataSize(uint16_t *width, uint16_t *height, void *param);
 void GetEthTypeDomainSize(uint16_t *width, uint16_t *height, void *param);
-void *GetEthContractData(uint8_t *row, uint8_t *col, void *param);
-bool GetEthInputDataExist(void *indata, void *param);
-bool GetEthFromAddressExist(void *indata, void *param);
-bool GetEthFromAddressNotExist(void *indata, void *param);
 bool GetEthMessageFromExist(void *indata, void *param);
 bool GetEthMessageFromNotExist(void *indata, void *param);
-bool EthInputExistContractNot(void *indata, void *param);
 bool GetEthPermitWarningExist(void *indata, void *param);
 bool GetEthPermitCantSign(void *indata, void *param);
 bool GetEthOperationWarningExist(void *indata, void *param);
@@ -66,6 +31,7 @@ void GetEthPersonalMessageType(void *indata, void *param, uint32_t maxLen);
 void GetMessageFrom(void *indata, void *param, uint32_t maxLen);
 void GetMessageUtf8(void *indata, void *param, uint32_t maxLen);
 void GetMessageRaw(void *indata, void *param, uint32_t maxLen);
+void GuiShowEthMessagePaged(lv_obj_t *parent, void *param, bool raw);
 void EthContractCheckRawDataCallback(void);
 
 void *GuiGetEthTypeData(void);
@@ -81,8 +47,6 @@ void GetEthTypedDataPrimayType(void *indata, void *param, uint32_t maxLen);
 void GetEthTypedDataMessage(void *indata, void *param, uint32_t maxLen);
 int GetEthTypedDataMessageLen(void *param);
 void GetEthTypedDataFrom(void *indata, void *param, uint32_t maxLen);
-void EthContractLearnMore(lv_event_t *e);
-void EthContractCheckRawData(lv_event_t *e);
 
 typedef struct {
     uint64_t chainId;

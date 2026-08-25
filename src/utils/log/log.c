@@ -96,7 +96,7 @@ void WriteLogFormat(uint32_t event, const char *format, ...)
     va_list argList;
     va_start(argList, format);
     //printf("WriteLogFormat,event=%d\r\n", event);
-    vsprintf(str, format, argList);
+    vsnprintf(str, LOG_MAX_STRING_LEN, format, argList);
     LogData_t logData = {0};
     logData.event = event;
     logData.dataType = 1;
@@ -344,6 +344,7 @@ static uint32_t FindLogOffsetAddr(void)
         addr = addr + LOG_DATA_HEAD_SIZE + logData.length * 4;
     }
     //err, need erase the whole log flash zone.
+    EXT_FREE(originalData);
     LogEraseSync();
     return SPI_FLASH_ADDR_LOG;
 }

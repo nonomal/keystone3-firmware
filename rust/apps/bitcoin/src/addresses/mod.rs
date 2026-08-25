@@ -39,8 +39,10 @@ pub fn get_address(hd_path: String, extended_pub_key: &String) -> Result<String>
         "m/84'/0'/0'" => Address::p2wpkh(&compressed_ecdsa_pubkey, Network::Bitcoin),
         "m/84'/1'/0'" => Address::p2wpkh(&compressed_ecdsa_pubkey, Network::BitcoinTestnet),
         "m/49'/2'/0'" => Address::p2shp2wpkh(&compressed_ecdsa_pubkey, Network::Litecoin),
+        "m/84'/2'/0'" => Address::p2wpkh(&compressed_ecdsa_pubkey, Network::Litecoin),
         "m/44'/3'/0'" => Address::p2pkh(&compressed_ecdsa_pubkey, Network::Dogecoin),
         "m/44'/5'/0'" => Address::p2pkh(&compressed_ecdsa_pubkey, Network::Dash),
+        "m/44'/133'/0'" => Address::p2pkh(&compressed_ecdsa_pubkey, Network::Zcash),
         "m/44'/145'/0'" => Address::p2pkh(&compressed_ecdsa_pubkey, Network::BitcoinCash),
         "m/86'/1'/0'" => Address::p2tr_no_script(&compressed_ecdsa_pubkey, Network::BitcoinTestnet),
         "m/86'/0'/0'" => Address::p2tr_no_script(&compressed_ecdsa_pubkey, Network::Bitcoin),
@@ -51,9 +53,35 @@ pub fn get_address(hd_path: String, extended_pub_key: &String) -> Result<String>
     Ok(address.to_string())
 }
 
+pub fn get_address_with_network(
+    hd_path: String,
+    extended_pub_key: &String,
+    network: Network,
+) -> Result<String> {
+    let account_hd_path = derivation_account_path!(hd_path)?;
+    let address_hd_path = derivation_address_path!(hd_path)?;
+    let compressed_ecdsa_pubkey = derive_public_key(extended_pub_key, address_hd_path)?;
+    let purpose = account_hd_path
+        .split('/')
+        .nth(1)
+        .and_then(|v| v.trim_end_matches('\'').parse::<u32>().ok())
+        .ok_or_else(|| BitcoinError::AddressError("invalid purpose".to_string()))?;
+    let address = match purpose {
+        44 => Address::p2pkh(&compressed_ecdsa_pubkey, network),
+        49 => Address::p2shp2wpkh(&compressed_ecdsa_pubkey, network),
+        84 => Address::p2wpkh(&compressed_ecdsa_pubkey, network),
+        86 => Address::p2tr_no_script(&compressed_ecdsa_pubkey, network),
+        _ => Err(BitcoinError::AddressError(
+            "network is not supported".to_string(),
+        )),
+    }?;
+    Ok(address.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::errors::BitcoinError;
     use alloc::string::String;
     use alloc::string::ToString;
 
@@ -118,6 +146,69 @@ mod tests {
     }
 
     #[test]
+    fn test_get_address_with_network_uses_explicit_network() {
+        let extended_pubkey = "zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs";
+        let address = get_address_with_network(
+            String::from("M/84'/0'/0'/0/0"),
+            &extended_pubkey.to_string(),
+            Network::BitcoinTestnet,
+        )
+        .unwrap();
+        assert!(address.starts_with("tb1q"));
+    }
+
+    #[test]
+    fn test_get_address_with_network_uses_testnet_with_xpub_p2pkh() {
+        let extended_pubkey = "xpub6BosfCnifzxcFwrSzQiqu2DBVTshkCXacvNsWGYJVVhhawA7d4R5WSWGFNbi8Aw6ZRc1brxMyWMzG3DSSSSoekkudhUd9yLb6qx39T9nMdj";
+        let address = get_address_with_network(
+            String::from("M/44'/0'/0'/0/0"),
+            &extended_pubkey.to_string(),
+            Network::BitcoinTestnet,
+        )
+        .unwrap();
+        assert_eq!(address, "n1M8ZVQtL7QoFvGMg24D6b2ojWvFXCGpoS");
+    }
+
+    #[test]
+    fn test_get_address_with_network_uses_testnet_with_xpub_p2sh_p2wpkh() {
+        let extended_pubkey = "ypub6Ww3ibxVfGzLrAH1PNcjyAWenMTbbAosGNB6VvmSEgytSER9azLDWCxoJwW7Ke7icmizBMXrzBx9979FfaHxHcrArf3zbeJJJUZPf663zsP";
+        let address = get_address_with_network(
+            String::from("M/49'/0'/0'/0/0"),
+            &extended_pubkey.to_string(),
+            Network::BitcoinTestnet,
+        )
+        .unwrap();
+        assert_eq!(address, "2My47gHNc8nhX5kBWqXHU4f8uuQvQKEgwMd");
+    }
+
+    #[test]
+    fn test_get_address_with_network_uses_testnet_with_xpub_p2wpkh() {
+        let extended_pubkey = "zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs";
+        let address = get_address_with_network(
+            String::from("M/84'/0'/0'/0/0"),
+            &extended_pubkey.to_string(),
+            Network::BitcoinTestnet,
+        )
+        .unwrap();
+        assert_eq!(address, "tb1qcr8te4kr609gcawutmrza0j4xv80jy8zmfp6l0");
+    }
+
+    #[test]
+    fn test_get_address_with_network_uses_testnet_with_xpub_p2tr() {
+        let extended_pubkey = "xpub6Cq9mdT8xwFe9LYQnt9y1hJXTyo7KQJM8pRH6K95F1mbELzgm825m3hyAZ97vsUV8Xh7VRwu7bKuLZEmUV1ABqCRQqFzZHAsfaJXTYSY1cf";
+        let address = get_address_with_network(
+            String::from("M/86'/0'/0'/0/0"),
+            &extended_pubkey.to_string(),
+            Network::BitcoinTestnet,
+        )
+        .unwrap();
+        assert_eq!(
+            address,
+            "tb1pf7al7fmsrfxftwp0durgv3zv9ezqzrqdhk34gjcuqasw6fnlxu7se0srgl"
+        );
+    }
+
+    #[test]
     fn test_bch_p2pkh_address() {
         let extended_pubkey = "xpub6ByHsPNSQXTWZ7PLESMY2FufyYWtLXagSUpMQq7Un96SiThZH2iJB1X7pwviH1WtKVeDP6K8d6xxFzzoaFzF3s8BKCZx8oEDdDkNnp4owAZ";
         let address = get_address(
@@ -151,6 +242,17 @@ mod tests {
     }
 
     #[test]
+    fn test_ltc_p2wpkh_address() {
+        let extended_pubkey = "zpub6rPo5mF47z5coVm5rvWv7fv181awb7Vckn5Cf3xQXBVKu18kuBHDhNi1Jrb4br6vVD3ZbrnXemEsWJoR18mZwkUdzwD8TQnHDUCGxqZ6swA";
+        let address = get_address(
+            String::from("m/84'/2'/0'/0/0"),
+            &extended_pubkey.to_string(),
+        )
+        .unwrap();
+        assert_eq!(address, "ltc1qjmxnz78nmc8nq77wuxh25n2es7rzm5c2rkk4wh")
+    }
+
+    #[test]
     fn test_btc_p2tr_no_script_address() {
         let extended_pubkey = "xpub6Cq9mdT8xwFe9LYQnt9y1hJXTyo7KQJM8pRH6K95F1mbELzgm825m3hyAZ97vsUV8Xh7VRwu7bKuLZEmUV1ABqCRQqFzZHAsfaJXTYSY1cf";
         let address =
@@ -170,5 +272,42 @@ mod tests {
             address,
             "tb1p8wpt9v4frpf3tkn0srd97pksgsxc5hs52lafxwru9kgeephvs7rqlqt9zj"
         );
+    }
+
+    #[test]
+    fn test_get_address_invalid_xpub() {
+        let err =
+            get_address(String::from("M/44'/0'/0'/0/0"), &"invalid_xpub".to_string()).unwrap_err();
+        assert_eq!(
+            err,
+            BitcoinError::AddressError("xpub is not valid".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_address_network_not_supported() {
+        let extended_pubkey = "xpub6BosfCnifzxcFwrSzQiqu2DBVTshkCXacvNsWGYJVVhhawA7d4R5WSWGFNbi8Aw6ZRc1brxMyWMzG3DSSSSoekkudhUd9yLb6qx39T9nMdj";
+        let err = get_address(
+            String::from("M/45'/0'/0'/0/0"),
+            &extended_pubkey.to_string(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            BitcoinError::AddressError("network is not supported".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_address_invalid_hd_path_length() {
+        let extended_pubkey = "zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs";
+        let err =
+            get_address(String::from("M/84'/0'/0'/0"), &extended_pubkey.to_string()).unwrap_err();
+        match err {
+            BitcoinError::SignLegacyTxError(message) => {
+                assert!(message.contains("invalid hd_path"))
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }

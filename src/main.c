@@ -38,6 +38,7 @@
 #include "user_sqlite3.h"
 #include "screen_manager.h"
 #include "keystore.h"
+#include "se_manager.h"
 #include "log.h"
 #include "fingerprint_process.h"
 #include "fingerprint_task.h"
@@ -50,12 +51,14 @@
 #include "version.h"
 #include "hardware_version.h"
 #include "librust_c.h"
+#include "drv_mpu.h"
 
 int main(void)
 {
     __enable_irq();
     SetAllGpioLow();
     SystemClockInit();
+    MpuInit();
     SensorInit();
     Uart0Init(CmdIsrRcvByte);
     FingerprintInit();
@@ -75,9 +78,9 @@ int main(void)
     UserMsgInit();
     DS28S60_Init();
     Atecc608bInit();
+    SeManagerInit();               // resolve SE generation once (after the 608B is up, before any SE-account use)
     AccountsDataCheck();
     MountUsbFatfs();
-    UsbInit();
     RtcInit();
     MotorInit();
     BatteryInit();

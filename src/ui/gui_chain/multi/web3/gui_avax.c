@@ -5,6 +5,9 @@
 #include "secret_cache.h"
 #include "gui_chain.h"
 #include "gui_chain_components.h"
+#include "keystore.h"
+
+#define AVAX_COMPONENT_WIDTH 376
 
 #define CHECK_FREE_PARSE_RESULT(result)                                     \
     if (result != NULL)                                                     \
@@ -19,10 +22,6 @@ static void *g_parseResult = NULL;
 static bool g_isMulti = false;
 static ViewType g_viewType = ViewTypeUnKnown;
 
-static lv_obj_t *CreateOverviewAmountView(lv_obj_t *parent, DisplayAvaxTx *data, lv_obj_t *lastView);
-static lv_obj_t *CreateOverviewActionView(lv_obj_t *parent, DisplayAvaxTx *data, lv_obj_t *lastView);
-static lv_obj_t *CreateOverviewDestinationView(lv_obj_t *parent, DisplayAvaxTx *data, lv_obj_t *lastView);
-static lv_obj_t *CreateOverviewContractDataView(lv_obj_t *parent, DisplayAvaxTx *data, lv_obj_t *lastView);
 UREncodeResult *GetAvaxSignDataDynamic(bool isUnlimited);
 
 void GuiSetAvaxUrData(URParseResult *urResult, URParseMultiResult *urMultiResult, bool multi)
@@ -35,34 +34,14 @@ void GuiSetAvaxUrData(URParseResult *urResult, URParseMultiResult *urMultiResult
 
 UREncodeResult *GuiGetAvaxSignQrCodeData(void)
 {
-    return GetAvaxSignDataDynamic(false);
+    void *data = g_isMulti ? g_urMultiResult->data : g_urResult->data;
+    return SignInternal(avax_sign, data);
 }
 
 UREncodeResult *GuiGetAvaxSignUrDataUnlimited(void)
 {
-    return GetAvaxSignDataDynamic(true);
-}
-
-UREncodeResult *GetAvaxSignDataDynamic(bool isUnlimited)
-{
-    bool enable = IsPreviousLockScreenEnable();
-    SetLockScreen(false);
-    UREncodeResult *encodeResult;
     void *data = g_isMulti ? g_urMultiResult->data : g_urResult->data;
-    do {
-        uint8_t seed[64];
-        int len = GetMnemonicType() == MNEMONIC_TYPE_BIP39 ? sizeof(seed) : GetCurrentAccountEntropyLen();
-        GetAccountSeed(GetCurrentAccountIndex(), seed, SecretCacheGetPassword());
-        if (isUnlimited) {
-            encodeResult = avax_sign_unlimited(data, seed, len);
-        } else {
-            encodeResult = avax_sign(data, seed, len);
-        }
-        ClearSecretCache();
-        CHECK_CHAIN_BREAK(encodeResult);
-    } while (0);
-    SetLockScreen(enable);
-    return encodeResult;
+    return SignInternal(avax_sign_unlimited, data);
 }
 
 PtrT_TransactionCheckResult GuiGetAvaxCheckResult(void)
@@ -81,14 +60,16 @@ void *GuiGetAvaxGUIData(void)
         uint8_t mfp[4] = {0};
         GetMasterFingerPrint(mfp);
         PtrT_CSliceFFI_ExtendedPublicKey public_keys = SRAM_MALLOC(sizeof(CSliceFFI_ExtendedPublicKey));
-        ExtendedPublicKey keys[2];
+        ExtendedPublicKey keys[11];
         public_keys->data = keys;
         public_keys->size = NUMBER_OF_ARRAYS(keys);
         keys[0].path = "m/44'/60'/0'";
         keys[0].xpub = GetCurrentAccountPublicKey(XPUB_TYPE_AVAX_BIP44_STANDARD);
-        keys[1].path = "m/44'/9000'/0'";
-        keys[1].xpub = GetCurrentAccountPublicKey(XPUB_TYPE_AVAX_X_P);
-        PtrT_TransactionParseResult_DisplayTonTransaction parseResult = avax_parse_transaction(data, mfp, sizeof(mfp), public_keys);
+        for (int i = 0; i < 10; i++) {
+            keys[1 + i].path = GetCurrentAccountPath(XPUB_TYPE_AVAX_X_P_0 + i);
+            keys[1 + i].xpub = GetCurrentAccountPublicKey(XPUB_TYPE_AVAX_X_P_0 + i);
+        }
+        PtrT_TransactionParseResult_DisplayAvaxTx parseResult = avax_parse_transaction(data, mfp, sizeof(mfp), public_keys);
         SRAM_FREE(public_keys);
         CHECK_CHAIN_BREAK(parseResult);
         g_parseResult = (void *)parseResult;
@@ -102,147 +83,186 @@ typedef struct {
     bool isChange;
 } DisplayUtxoFromTo;
 
-lv_obj_t *CreateTxOverviewFromTo(lv_obj_t *parent, void *from, int fromLen, void *to, int toLen)
+static void GuiAvaxPrepareComponentParent(lv_obj_t *parent)
 {
-    int height = 16 + 30 + 8 + (60 + 8) * fromLen - 8 + 16 + 30 + 8 + (60 + 8) * toLen + 16;
-    lv_obj_t *container = CreateContentContainer(parent, 408, height);
-
-    DisplayUtxoFromTo *ptr = (DisplayUtxoFromTo *)from;
-    lv_obj_t *label = GuiCreateNoticeLabel(container, _("From"));
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 16);
-    for (int i = 0; i < fromLen; i++) {
-        lv_obj_t *label = GuiCreateIllustrateLabel(container, ptr[i].address);
-        lv_obj_set_width(label, 360);
-        lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 54 + 60 * i);
-    }
-
-    ptr = (DisplayUtxoFromTo *)to;
-    uint16_t offset = 30 + 8 + (60 + 8) * fromLen + 16;
-    label = GuiCreateNoticeLabel(container, _("To"));
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, offset);
-    for (int i = 0; i < toLen; i++) {
-        lv_obj_t *label = GuiCreateIllustrateLabel(container, ptr[i].address);
-        lv_obj_set_width(label, 360);
-        lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 38 + offset + 68 * i);
-    }
-
-    return container;
+    lv_obj_set_size(parent, AVAX_COMPONENT_WIDTH, 444);
+    lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(parent, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLL_ELASTIC);
 }
 
-lv_obj_t *CreateTxDetailsFromTo(lv_obj_t *parent, char *tag, void *fromTo, int len)
+static lv_obj_t *GuiAvaxCreateDetailsAddressCard(
+    lv_obj_t *parent,
+    lv_obj_t *lastView,
+    const char *title,
+    const DisplayUtxoFromTo *item)
 {
-    int height = 16 + 30 + 8 + (94 + 8) * len - 8 + 16;
-    lv_obj_t *container = CreateContentContainer(parent, 408, height);
+    lv_obj_t *card = CreateRelativeTransactionContentContainer(
+        parent, AVAX_COMPONENT_WIDTH, 0, lastView);
+    uint16_t height = 16;
 
+    lv_obj_t *label = GuiCreateIllustrateLabel(card, title);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, height);
+    lv_obj_set_style_text_opa(label, LV_OPA_64, LV_PART_MAIN);
+    height += 34;
+
+    label = GuiCreateIllustrateLabel(card, item->amount);
+    lv_obj_set_width(label, AVAX_COMPONENT_WIDTH - 48);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_color(label, ORANGE_COLOR, LV_PART_MAIN);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, height);
+    lv_obj_update_layout(label);
+    height += lv_obj_get_height(label) + 4;
+
+    label = GuiCreateIllustrateLabel(card, item->address);
+    lv_obj_set_width(label, AVAX_COMPONENT_WIDTH - 48);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, height);
+    lv_obj_update_layout(label);
+    height += lv_obj_get_height(label);
+
+    if (item->path != NULL && item->path[0] != '\0') {
+        height += 4;
+        label = GuiCreateNoticeLabel(card, item->path);
+        lv_obj_set_width(label, AVAX_COMPONENT_WIDTH - 48);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+        lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, height);
+        lv_obj_update_layout(label);
+        height += lv_obj_get_height(label);
+    }
+
+    lv_obj_set_height(card, height + 16);
+    lv_obj_update_layout(card);
+    return card;
+}
+
+static lv_obj_t *GuiAvaxAppendAddresses(
+    lv_obj_t *parent,
+    lv_obj_t *lastView,
+    const char *tag,
+    void *fromTo,
+    int len,
+    bool showDetails)
+{
     DisplayUtxoFromTo *ptr = (DisplayUtxoFromTo *)fromTo;
-    lv_obj_t *label = GuiCreateNoticeLabel(container, tag);
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 24, 16);
     for (int i = 0; i < len; i++) {
-        lv_obj_t *label = GuiCreateIllustrateLabel(container, "");
-        lv_label_set_recolor(label, true);
-        lv_label_set_text_fmt(label, "%d    #F5870A %s#", i, ptr[i].amount);
-        GuiAlignToPrevObj(label, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 8);
-
-        if (ptr[i].isChange && !strcmp(tag, "To")) {
-            lv_obj_t *btn = GuiCreateBtnWithFont(container,  _("Change"), &openSansEnIllustrate);
-            lv_obj_set_size(btn, 87, 30);
-            lv_obj_clear_flag(btn, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_set_style_bg_opa(btn, LV_OPA_20, LV_PART_MAIN);
-            lv_obj_set_style_bg_color(btn, WHITE_COLOR, LV_PART_MAIN);
-            lv_obj_set_style_radius(btn, 16, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_align_to(btn, label, LV_ALIGN_OUT_RIGHT_MID, 16, 0);
-        }
-
-        label = GuiCreateIllustrateLabel(container, ptr[i].address);
-        if (ptr[i].isChange && !strcmp(tag, "To")) {
-            lv_obj_align_to(label, lv_obj_get_child(container, lv_obj_get_child_cnt(container) - 3), LV_ALIGN_OUT_BOTTOM_LEFT, 0, 4);
+        char title[BUFFER_SIZE_64] = {0};
+        if (len > 1) {
+            snprintf_s(title, sizeof(title), "%s #%d%s", tag, i + 1,
+                       ptr[i].isChange && !strcmp(tag, "To") ? " (Change)" : "");
         } else {
-            GuiAlignToPrevObj(label, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 4);
+            snprintf_s(title, sizeof(title), "%s%s", tag,
+                       ptr[i].isChange && !strcmp(tag, "To") ? " (Change)" : "");
         }
-        lv_obj_set_width(label, 360);
 
-        if (ptr[i].path != NULL && strlen(ptr[i].path) > 0) {
-            label = GuiCreateNoticeLabel(container, ptr[i].path);
-            GuiAlignToPrevObj(label, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 4);
-            lv_obj_set_width(label, 360);
-            height += 34;
+        if (showDetails) {
+            lastView = GuiAvaxCreateDetailsAddressCard(parent, lastView, title, &ptr[i]);
+        } else {
+            lastView = CreateTransactionItemViewWithWidth(
+                parent,
+                title,
+                ptr[i].address,
+                lastView,
+                AVAX_COMPONENT_WIDTH);
         }
     }
-    lv_obj_set_height(container, height);
-
-    return container;
+    return lastView;
 }
 
 void GuiAvaxTxOverview(lv_obj_t *parent, void *totalData)
 {
     DisplayAvaxTx *txData = (DisplayAvaxTx *)totalData;
-    lv_obj_set_size(parent, 408, 444);
-    lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(parent, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    GuiAvaxPrepareComponentParent(parent);
 
-    lv_obj_t *container = CreateValueOverviewValue(parent, "Value", txData->data->amount, "Fee", txData->data->fee_amount);
+    lv_obj_t *lastView = CreateTransactionOverviewCardWithWidth(
+        parent,
+        _("Value"),
+        txData->data->amount,
+        _("Fee"),
+        txData->data->fee_amount,
+        AVAX_COMPONENT_WIDTH);
 
     if (txData->data->network != NULL) {
-        char *key[] = {txData->data->network_key, "Subnet ID"};
-        char *value[] = {txData->data->network, txData->data->subnet_id};
-        container = CreateDynamicInfoView(parent, key, value, NUMBER_OF_ARRAYS(key) - (txData->data->subnet_id ? 0 : 1));
-        GuiAlignToPrevObj(container, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
+        lastView = CreateTransactionItemViewWithWidth(
+            parent,
+            txData->data->network_key,
+            txData->data->network,
+            lastView,
+            AVAX_COMPONENT_WIDTH);
+        if (txData->data->subnet_id != NULL) {
+            lastView = CreateTransactionItemViewWithWidth(
+                parent, _("Subnet ID"), txData->data->subnet_id, lastView, AVAX_COMPONENT_WIDTH);
+        }
     }
 
     if (txData->data->method != NULL) {
-        container = CreateSingleInfoView(parent, txData->data->method->method_key, txData->data->method->method);
-        GuiAlignToPrevObj(container, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
+        lastView = CreateTransactionItemViewWithWidth(
+            parent,
+            txData->data->method->method_key,
+            txData->data->method->method,
+            lastView,
+            AVAX_COMPONENT_WIDTH);
     }
 
-    container = CreateTxOverviewFromTo(parent, txData->data->from, 1, txData->data->to->data, txData->data->to->size);
-    GuiAlignToPrevObj(container, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
-    lv_obj_update_layout(parent);
+    lastView = GuiAvaxAppendAddresses(
+        parent, lastView, _("From"), txData->data->from->data, txData->data->from->size, false);
+    GuiAvaxAppendAddresses(
+        parent, lastView, _("To"), txData->data->to->data, txData->data->to->size, false);
 }
 
 void GuiAvaxTxRawData(lv_obj_t *parent, void *totalData)
 {
     DisplayAvaxTx *txData = (DisplayAvaxTx *)totalData;
-    lv_obj_set_size(parent, 408, 444);
-    lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(parent, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    GuiAvaxPrepareComponentParent(parent);
 
-    lv_obj_t *container = NULL;
+    lv_obj_t *lastView = NULL;
     if (txData->data->network != NULL) {
-        char *key[] = {txData->data->network_key, "Subnet ID"};
-        char *value[] = {txData->data->network, txData->data->subnet_id};
-        container = CreateDynamicInfoView(parent, key, value, NUMBER_OF_ARRAYS(key) - (txData->data->subnet_id ? 0 : 1));
+        lastView = CreateTransactionItemViewWithWidth(
+            parent,
+            txData->data->network_key,
+            txData->data->network,
+            lastView,
+            AVAX_COMPONENT_WIDTH);
+        if (txData->data->subnet_id != NULL) {
+            lastView = CreateTransactionItemViewWithWidth(
+                parent, _("Subnet ID"), txData->data->subnet_id, lastView, AVAX_COMPONENT_WIDTH);
+        }
     }
 
     if (txData->data->method != NULL) {
         char startTime[BUFFER_SIZE_64] = {0}, endTime[BUFFER_SIZE_64] = {0};
-        uint8_t keyLen = 1;
+        lastView = CreateTransactionItemViewWithWidth(
+            parent,
+            txData->data->method->method_key,
+            txData->data->method->method,
+            lastView,
+            AVAX_COMPONENT_WIDTH);
         if (txData->data->method->start_time != 0 && txData->data->method->end_time != 0) {
             StampTimeToUtcTime(txData->data->method->start_time, startTime, sizeof(startTime));
             StampTimeToUtcTime(txData->data->method->end_time, endTime, sizeof(endTime));
-            keyLen = 3;
+            lastView = CreateTransactionItemViewWithWidth(
+                parent, _("Start time"), startTime, lastView, AVAX_COMPONENT_WIDTH);
+            lastView = CreateTransactionItemViewWithWidth(
+                parent, _("End Time"), endTime, lastView, AVAX_COMPONENT_WIDTH);
         }
-        char *key[] = {txData->data->method->method_key, "Start time", "End Time"};
-        char *value[] = {txData->data->method->method, startTime, endTime};
-        container = CreateDynamicInfoView(parent, key, value, keyLen);
-        GuiAlignToPrevObj(container, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
     }
 
-    container = CreateValueDetailValue(parent, txData->data->total_input_amount, txData->data->total_output_amount, txData->data->fee_amount);
-    GuiAlignToPrevObj(container, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
+    lastView = CreateTransactionItemViewWithWidth(
+        parent, _("Total Input"), txData->data->total_input_amount, lastView, AVAX_COMPONENT_WIDTH);
+    lastView = CreateTransactionItemViewWithWidth(
+        parent, _("Total Output"), txData->data->total_output_amount, lastView, AVAX_COMPONENT_WIDTH);
+    lastView = CreateTransactionItemViewWithWidth(
+        parent, _("Fee"), txData->data->fee_amount, lastView, AVAX_COMPONENT_WIDTH);
 
     if (txData->data->reward_address != NULL) {
-        container = CreateSingleInfoTwoLineView(parent, "Reward Address", txData->data->reward_address);
-        GuiAlignToPrevObj(container, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
+        lastView = CreateTransactionItemViewWithWidth(
+            parent, _("Reward Address"), txData->data->reward_address, lastView, AVAX_COMPONENT_WIDTH);
     }
 
-    container = CreateTxDetailsFromTo(parent, "From", txData->data->from, 1);
-    GuiAlignToPrevObj(container, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
-
-    container = CreateTxDetailsFromTo(parent, "To", txData->data->to->data, txData->data->to->size);
-    GuiAlignToPrevObj(container, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 16);
-    lv_obj_update_layout(parent);
+    lastView = GuiAvaxAppendAddresses(
+        parent, lastView, _("From"), txData->data->from->data, txData->data->from->size, true);
+    GuiAvaxAppendAddresses(
+        parent, lastView, _("To"), txData->data->to->data, txData->data->to->size, true);
 }
 
 void FreeAvaxMemory(void)

@@ -74,7 +74,7 @@ macro_rules! impl_new_error {
                 let result = Self::new();
                 Self {
                     error_code: error_code as u32,
-                    error_message: CString::new(error_message).unwrap().into_raw(),
+                    error_message: $crate::common::utils::convert_c_char(error_message),
                     ..result
                 }
             }
@@ -211,7 +211,7 @@ macro_rules! impl_new_error {
                 let result = Self::new();
                 Self {
                     error_code: error_code as u32,
-                    error_message: CString::new(error_message).unwrap().into_raw(),
+                    error_message: $crate::common::utils::convert_c_char(error_message),
                     ..result
                 }
             }
@@ -347,7 +347,7 @@ macro_rules! impl_simple_new_error {
                 let result = Self::new();
                 Self {
                     error_code: error_code as u32,
-                    error_message: CString::new(error_message).unwrap().into_raw(),
+                    error_message: $crate::common::utils::convert_c_char(error_message),
                     ..result
                 }
             }
@@ -486,6 +486,15 @@ macro_rules! extract_array {
     ($x: expr, $name: ident, $length: expr) => {{
         let ptr = $x as *mut $name;
         let result: &[$name] = core::slice::from_raw_parts(ptr, $length as usize);
+        result
+    }};
+}
+
+#[macro_export]
+macro_rules! extract_array_mut {
+    ($x: expr, $name: ident, $length: expr) => {{
+        let ptr = $x as *mut $name;
+        let result: &mut [$name] = core::slice::from_raw_parts_mut(ptr, $length as usize);
         result
     }};
 }

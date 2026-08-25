@@ -160,3 +160,59 @@ pub fn read_next_u8_32(bytes: &[u8], offset: &mut usize) -> [u8; 32] {
 
     data
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn primitive_readers_advance_the_offset() {
+        let mut bytes = vec![0x7F];
+        bytes.extend_from_slice(&0x1234_5678u32.to_le_bytes());
+        bytes.extend_from_slice(&0x0123_4567_89AB_CDEFu64.to_le_bytes());
+        bytes.push(1);
+        bytes.extend_from_slice(&[9, 8, 7]);
+        bytes.extend_from_slice(&[0xAA; 32]);
+
+        let mut offset = 0;
+        assert_eq!(read_next_u8(&bytes, &mut offset), 0x7F);
+        assert_eq!(read_next_u32(&bytes, &mut offset), 0x1234_5678);
+        assert_eq!(read_next_u64(&bytes, &mut offset), 0x0123_4567_89AB_CDEF);
+        assert!(read_next_bool(&bytes, &mut offset));
+        assert_eq!(read_next_vec_u8(&bytes, &mut offset, 3), vec![9, 8, 7]);
+        assert_eq!(read_next_u8_32(&bytes, &mut offset), [0xAA; 32]);
+        assert_eq!(offset, bytes.len());
+    }
+
+    #[test]
+    fn varinteger_roundtrip_updates_the_offset() {
+        for value in [0, 127, 128, 16_384, u32::MAX as u64, u64::MAX] {
+            let encoded = write_varinteger(value);
+            let mut offset = 0;
+
+            assert_eq!(read_varinteger(&encoded, &mut offset), value);
+            assert_eq!(offset, encoded.len());
+        }
+    }
+
+    #[test]
+    fn destination_entry_roundtrip() {
+        let entry = TxDestinationEntry {
+            original: String::from("48A1-test-address"),
+            amount: 12_345_678_901,
+            addr: AccountPublicAddress {
+                spend_public_key: [0x11; 32],
+                view_public_key: [0x22; 32],
+            },
+            is_subaddress: true,
+            is_integrated: false,
+        };
+
+        let encoded = write_tx_destination_entry(&entry);
+        let mut offset = 0;
+        let decoded = read_next_tx_destination_entry(&encoded, &mut offset);
+
+        assert_eq!(decoded, entry);
+        assert_eq!(offset, encoded.len());
+    }
+}

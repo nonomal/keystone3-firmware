@@ -31,7 +31,7 @@ int FatfsFileWrite(const char* path, const uint8_t *data, uint32_t len);
 int32_t read_qrcode();
 char *FatfsFileRead(const char* path);
 uint8_t *FatfsFileReadBytes(const char* path, uint32_t* readBytes);
-void FatfsGetFileName(const char *path, char *fileName[], uint32_t maxLen, uint32_t *number, const char *contain);
+void FatfsGetFileName(const char *path, char *fileName[], uint32_t maxLen, uint32_t *number, const char *contain, uint32_t maxCount);
 uint32_t GetCurrentStampTime(void);
 bool FatfsFileExist(const char *path);
 bool GetEnsName(const char *addr, char *name);
@@ -42,6 +42,9 @@ bool IsPreviousLockScreenEnable(void);
 void SetLockScreen(bool enable);
 void OTP_PowerOn(void);
 void random_buffer(uint8_t *buf, size_t len);
+bool IsPreviousLockScreenEnable(void);
+void SetLockScreen(bool enable);
+bool NeedUpdateBoot(void);
 
 extern bool g_reboot;
 
@@ -77,7 +80,7 @@ extern bool g_reboot;
         REMAPVIEW_ETH, \
         PC_SIMULATOR_PATH "/page_eth.json", \
         GuiGetEthData, \
-        GetEthTransType, \
+        NULL, \
         FreeEthMemory, \
     }, \
     { \
@@ -97,6 +100,20 @@ extern bool g_reboot;
     { \
         REMAPVIEW_TRX, \
         PC_SIMULATOR_PATH "/page_trx.json", \
+        GuiGetTrxData, \
+        NULL, \
+        FreeTrxMemory, \
+    }, \
+    { \
+        REMAPVIEW_TRX_PERSONAL_MESSAGE, \
+        PC_SIMULATOR_PATH "/page_trx_person.json", \
+        GuiGetTrxPersonalMessage, \
+        GetTrxPersonalMessageType, \
+        FreeTrxMemory, \
+    }, \
+    { \
+        REMAPVIEW_TRX_SWAP, \
+        PC_SIMULATOR_PATH "/page_trx_swap.json", \
         GuiGetTrxData, \
         NULL, \
         FreeTrxMemory, \
@@ -247,7 +264,14 @@ extern bool g_reboot;
         GuiGetAvaxGUIData, \
         NULL, \
         FreeAvaxMemory, \
-    },
+    },\
+    { \
+        REMAPVIEW_ZCASH, \
+        PC_SIMULATOR_PATH "/page_zcash.json", \
+        GuiGetZcashGUIData, \
+        NULL, \
+        FreeZcashMemory, \
+    }
 #endif
 
 #endif

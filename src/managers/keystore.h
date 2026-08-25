@@ -26,6 +26,9 @@
 #define ACCOUNT_TOTAL_LEN                       (AES_IV_LEN + ENTROPY_MAX_LEN + SEED_LEN + SLIP39_EMS_LEN + SE_DATA_RESERVED_LEN + HMAC_LEN)
 #define PARAM_LEN                               32
 
+#define MIN_PASSWORD_LEN                        6
+#define TON_MNEMONIC_WORDS_COUNT                24
+
 #define ITERATION_TIME                          700
 
 typedef struct {
@@ -43,15 +46,14 @@ typedef struct {
 } PassphraseInfo_t;
 
 int32_t GenerateEntropy(uint8_t *entropy, uint8_t entropyLen, const char *password);
-int32_t GenerateTonMnemonic(char* mnemonic, const char *password);
 int32_t SaveNewBip39Entropy(uint8_t accountIndex, const uint8_t *entropy, uint8_t entropyLen, const char *password);
-int32_t SaveNewTonMnemonic(uint8_t accountIndex, const char *mnemonic, const char *password);
 int32_t SaveNewSlip39Entropy(uint8_t accountIndex, const uint8_t *ems, const uint8_t *entropy, uint8_t entropyLen, const char *password, uint16_t id, uint8_t ie);
 int32_t GetAccountEntropy(uint8_t accountIndex, uint8_t *entropy, uint8_t *entropyLen, const char *password);
 int32_t GetAccountSeed(uint8_t accountIndex, uint8_t *seed, const char *password);
 int32_t GetAccountSlip39Ems(uint8_t accountIndex, uint8_t *slip39Ems, const char *password);
 int32_t ChangePassword(uint8_t accountIndex, const char *newPassword, const char *password);
-int32_t VerifyPassword(uint8_t *accountIndex, const char *password);
+int32_t FindAccountByPassword(uint8_t *matchedAccountIndex, const char *password);
+int32_t VerifyAccountPassword(uint8_t accountIndex, const char *password);
 int32_t GenerateTRNGRandomness(uint8_t *randomness, uint8_t len);
 bool CheckPassphraseSame(uint8_t accountIndex, const char *passphrase);
 char* GetPassphrase(uint8_t accountIndex);
